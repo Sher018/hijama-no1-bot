@@ -37,7 +37,7 @@ npm install
 npm run dev
 ```
 
-5. **Amvera:** в корне есть [`amvera.yml`](./amvera.yml) — сборка `npm run build`, старт `dist/index.js`, порт **3000**. В панели Amvera задайте те же переменные, что в `.env` (в т.ч. `PUBLIC_BASE_URL` вашего приложения на Amvera). Подробнее: [Node.JS Server (Amvera)](https://docs.amvera.ru/applications/environments/nodejs-server.html).
+5. **Amvera:** в корне [`amvera.yml`](./amvera.yml) — сборка `npm run build`, запуск **`npm run start`** (папка `dist/` появляется после сборки и не хранится в Git). Порт **3000**. Переменные — как в `.env`; **`PUBLIC_BASE_URL`** = внешний **https**-домен из раздела «Домены», не внутренний slug. Документация: [Node.JS Server (Amvera)](https://docs.amvera.ru/applications/environments/nodejs-server.html).
 
 6. Другой хостинг: `npm run build`, `npm start`, переменная `PORT` — как задаёт платформа.  
    Для webhook Telegram и ЮKassa укажите `PUBLIC_BASE_URL` (https без слэша в конце), **не** включайте `TELEGRAM_USE_POLLING` (или `false`).

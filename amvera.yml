@@ -8,6 +8,7 @@ meta:
 build:
   additionalCommands: npm run build
 
+# dist/ нет в Git — проверка «файл в репо» в UI падает на scriptName: dist/index.js
 run:
-  scriptName: dist/index.js
+  command: npm run start
   containerPort: 3000
