@@ -1,7 +1,10 @@
+import path from "node:path";
 import express from "express";
 import type { Telegraf } from "telegraf";
 import type { Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getAppVersion } from "../appMeta.js";
+import { projectRoot } from "../paths.js";
 import { createYookassaWebhookHandler } from "../services/paymentWebhook.js";
 
 const TELEGRAM_WEBHOOK_PATH = "/webhooks/telegram";
@@ -13,10 +16,18 @@ export function createHttpServer(
   options: { useTelegramWebhook: boolean }
 ): express.Express {
   const app = express();
+  /** Картинки услуг и приветствия: https://&lt;PUBLIC_BASE_URL&gt;/assets/bot/... */
+  app.use(
+    "/assets",
+    express.static(path.join(projectRoot(), "assets"), {
+      maxAge: "7d",
+      immutable: true,
+    })
+  );
   app.use(express.json());
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, version: getAppVersion() });
   });
 
   app.post(

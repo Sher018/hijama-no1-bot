@@ -40,6 +40,7 @@ import {
   assetPath,
   fileExists,
   getServiceById,
+  publicAssetUrl,
 } from "./content/servicesCatalog.js";
 
 interface SessionData {
@@ -151,7 +152,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       }
     }
 
-    await sendMainWelcome(ctx, supabase);
+    await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
   });
 
   bot.help(async (ctx) => {
@@ -169,7 +170,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   bot.action("menu:main", async (ctx) => {
     if (!ctx.from) return;
     await ctx.answerCbQuery();
-    await sendMainWelcome(ctx, supabase);
+    await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
   });
 
   bot.action("menu:services", async (ctx) => {
@@ -223,9 +224,23 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         ],
       ]),
     };
+    const remoteUrl = publicAssetUrl(env.PUBLIC_BASE_URL, "services", s.imageFile);
     if (fileExists(img)) {
       await ctx.replyWithPhoto({ source: img }, { caption, ...extra });
+    } else if (remoteUrl) {
+      try {
+        await ctx.replyWithPhoto({ url: remoteUrl }, { caption, ...extra });
+      } catch (e) {
+        console.warn(
+          `Услуга ${s.id}: нет файла на диске и ошибка URL ${remoteUrl}`,
+          e
+        );
+        await ctx.reply(caption, extra);
+      }
     } else {
+      console.warn(
+        `Услуга ${s.id}: добавьте assets/bot/services/${s.imageFile} в репозиторий`
+      );
       await ctx.reply(caption, extra);
     }
   });
@@ -256,7 +271,13 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     if (slots.length === 0) {
       await ctx.answerCbQuery("Свободных слотов нет");
       const empty =
-        "Сейчас нет свободных слотов (возможен выходной день или расписание ещё не заполнено). Загляните позже или напишите нам.";
+        "Свободных слотов сейчас нет. Возможные причины:\n" +
+        "• мастер ещё не добавил расписание в боте;\n" +
+        "• выбран выходной день (мастер отметил день в «Админка → Выходные»);\n" +
+        "• все окна уже заняты.\n\n" +
+        "Мастеру: /admin → слоты или команда /addslot в формате:\n" +
+        "/addslot 2026-04-15 14:00 60\n\n" +
+        "Клиентам: напишите нам в этот чат или зайдите позже.";
       const msg = ctx.callbackQuery?.message;
       if (msg && "photo" in msg) {
         await ctx.reply(empty);

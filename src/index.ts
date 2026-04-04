@@ -3,8 +3,10 @@ import { createSupabase } from "./db/supabase.js";
 import { buildBot } from "./bot/setup.js";
 import { createHttpServer, syncTelegramWebhook } from "./api/httpServer.js";
 import { startSchedulers } from "./scheduler/reminders.js";
+import { getAppVersion } from "./appMeta.js";
 
 const env = loadEnv();
+console.log(`hijama-no1-bot v${getAppVersion()} starting…`);
 const supabase = createSupabase(env);
 const bot = buildBot(env, supabase);
 

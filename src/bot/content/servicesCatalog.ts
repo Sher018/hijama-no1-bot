@@ -1,15 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { projectRoot } from "../../paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-export function projectRoot(): string {
-  return path.resolve(__dirname, "../../..");
-}
+export { projectRoot };
 
 export function assetPath(...segments: string[]): string {
   return path.join(projectRoot(), "assets", "bot", ...segments);
+}
+
+/** Публичный URL файла под /assets/bot/... (после express.static). */
+export function publicAssetUrl(
+  publicBaseUrl: string | undefined,
+  ...segments: string[]
+): string | null {
+  const base = publicBaseUrl?.replace(/\/$/, "");
+  if (!base) return null;
+  const parts = ["assets", "bot", ...segments];
+  return `${base}/${parts.map((p) => encodeURIComponent(p)).join("/")}`;
 }
 
 export function fileExists(p: string): boolean {
