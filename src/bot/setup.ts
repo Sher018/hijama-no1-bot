@@ -3,7 +3,10 @@ import type { Context } from "telegraf";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AppointmentWithRelations } from "../db/types.js";
+import type {
+  AppointmentStatus,
+  AppointmentWithRelations,
+} from "../db/types.js";
 import { upsertClient, getClientByTelegramId } from "../services/clientsRepo.js";
 import {
   createPendingAppointment,
@@ -12,7 +15,7 @@ import {
   getAppointmentById,
   cancelAppointmentByAdmin,
   moveAppointmentToSlot,
-  listConfirmedAppointments,
+  listAppointmentsInSlotRange,
 } from "../services/appointmentsRepo.js";
 import {
   listAvailableSlots,
@@ -60,6 +63,42 @@ type InlineMessageExtra = NonNullable<
 
 function isAdmin(ctx: BotContext, env: Env): boolean {
   return ctx.from?.id === env.ADMIN_TELEGRAM_ID;
+}
+
+/** Закреплённая reply-клавиатура админа (Telegram «закрепить» внизу чата). */
+function adminPinnedReplyKb() {
+  return Markup.keyboard([
+    ["Выходные дни", "Цены услуг"],
+    ["Слоты и записи", "Справка"],
+  ])
+    .resize()
+    .persistent();
+}
+
+function adminBookingPaymentLine(status: AppointmentStatus): string {
+  switch (status) {
+    case "confirmed":
+    case "completed":
+      return "✅ Оплачено";
+    case "pending_payment":
+      return "⏳ Ожидает оплаты";
+    case "cancelled":
+      return "❌ Не оплачено";
+    default:
+      return String(status);
+  }
+}
+
+function formatAdminBookingMessage(a: AppointmentWithRelations): string {
+  const name = a.clients.full_name?.trim() || "—";
+  const phone = a.clients.phone?.trim() || "—";
+  return [
+    formatSlotRu(a.slots.starts_at),
+    `Имя: ${name}`,
+    `Телефон: ${phone}`,
+    `Статус: ${adminBookingPaymentLine(a.status)}`,
+    `запись: ${a.id}`,
+  ].join("\n");
 }
 
 async function answerAndEditOrReplyText(
@@ -154,6 +193,12 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
 
     await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    if (isAdmin(ctx as BotContext, env)) {
+      await ctx.reply(
+        "Разделы администратора — кнопки внизу закреплены.",
+        adminPinnedReplyKb()
+      );
+    }
   });
 
   bot.help(async (ctx) => {
@@ -331,8 +376,122 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
   });
 
+  const adminRootKb = () =>
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback("Выходные дни", "admin:closure"),
+        Markup.button.callback("Цены услуг", "admin:prices"),
+      ],
+      [
+        Markup.button.callback("Слоты и записи", "admin:slots_menu"),
+        Markup.button.callback("Справка (текст)", "admin:cmd:help"),
+      ],
+    ]);
+
+  async function showAdminClosurePanel(ctx: BotContext) {
+    let days: string[] = [];
+    try {
+      days = await listClosureDays(supabase);
+    } catch {
+      await ctx.reply(
+        "Таблица выходных не найдена. Выполните миграцию Supabase: closure_days."
+      );
+      return;
+    }
+    const rows: ReturnType<typeof Markup.button.callback>[][] = days.map(
+      (d) => [Markup.button.callback(`✕ ${d}`, `admin:closure:rm:${d}`)]
+    );
+    rows.push([Markup.button.callback("➕ Добавить день", "admin:closure:add")]);
+    rows.push([Markup.button.callback("« Назад", "admin:home")]);
+    const text =
+      days.length > 0
+        ? `Дни без записи (клиенты не видят слоты в эти даты):\n${days.join("\n")}`
+        : "Выходные дни не заданы. Добавьте дату — в этот день запись через бота недоступна.";
+    await ctx.reply(text, Markup.inlineKeyboard(rows));
+  }
+
+  async function showAdminPricesPanel(ctx: BotContext) {
+    const prices = await getServicePrices(supabase);
+    const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+    for (let i = 0; i < SERVICES.length; i += 2) {
+      const a = SERVICES[i];
+      const b = SERVICES[i + 1];
+      const line = [
+        Markup.button.callback(
+          `${a.buttonLabel} · ${prices[a.id] ?? 10} ₽`,
+          `admin:price:${a.id}`
+        ),
+      ];
+      if (b) {
+        line.push(
+          Markup.button.callback(
+            `${b.buttonLabel} · ${prices[b.id] ?? 10} ₽`,
+            `admin:price:${b.id}`
+          )
+        );
+      }
+      rows.push(line);
+    }
+    rows.push([Markup.button.callback("« Назад", "admin:home")]);
+    await ctx.reply(
+      "Цены услуг (информация для клиентов в разделе «Услуги»). Нажмите услугу, чтобы изменить:",
+      Markup.inlineKeyboard(rows)
+    );
+  }
+
+  async function showAdminSlotsMenu(ctx: BotContext) {
+    await ctx.reply(
+      "Слоты и записи:",
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("Список слотов", "admin:cmd:slots"),
+          Markup.button.callback("Записи 14 дн.", "admin:cmd:bookings"),
+        ],
+        [Markup.button.callback("« Назад", "admin:home")],
+      ])
+    );
+  }
+
+  async function showAdminHelpText(ctx: BotContext) {
+    await ctx.reply(
+      [
+        "Текстовые команды (дублируют кнопки):",
+        "/slots — слоты",
+        "/addslot ГГГГ-ММ-ДД ЧЧ:ММ длительность_мин",
+        "/bookings — записи 14 дней",
+        "/cancel uuid — отменить запись",
+        "/move uuid_записи uuid_слота — перенос",
+        "/unpublishslot uuid — снять слот с публикации",
+        "/deleteslot uuid — удалить свободный слот",
+        "",
+        "Приветствие: settings.welcome_text JSON {\"text\":\"...\"}.",
+      ].join("\n")
+    );
+  }
+
+  const slotsListFooter =
+    "\n\n—\nID слота — uuid записи в таблице слотов (public.slots). Нужен для /deleteslot, /unpublishslot и /move (второй аргумент — uuid слота).";
+
   bot.on("text", async (ctx, next) => {
     if (!ctx.from) return next();
+
+    const trimmed = ctx.message.text.trim();
+    const step = ctx.session?.step;
+    const adminPinnedBlocksBooking =
+      step === "name" || step === "phone";
+    if (isAdmin(ctx as BotContext, env) && !adminPinnedBlocksBooking) {
+      const adminPinned: Record<string, () => Promise<void>> = {
+        "Выходные дни": () => showAdminClosurePanel(ctx),
+        "Цены услуг": () => showAdminPricesPanel(ctx),
+        "Слоты и записи": () => showAdminSlotsMenu(ctx),
+        Справка: () => showAdminHelpText(ctx),
+      };
+      const run = adminPinned[trimmed];
+      if (run) {
+        await run();
+        return;
+      }
+    }
 
     if (
       ctx.session?.step === "admin_closure" &&
@@ -483,23 +642,15 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     return next();
   });
 
-  const adminRootKb = () =>
-    Markup.inlineKeyboard([
-      [
-        Markup.button.callback("Выходные дни", "admin:closure"),
-        Markup.button.callback("Цены услуг", "admin:prices"),
-      ],
-      [
-        Markup.button.callback("Слоты и записи", "admin:slots_menu"),
-        Markup.button.callback("Справка (текст)", "admin:cmd:help"),
-      ],
-    ]);
-
   bot.command("admin", async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
     }
+    await ctx.reply(
+      "Панель администратора. Кнопки внизу закреплены — быстрый доступ к разделам.",
+      adminPinnedReplyKb()
+    );
     await ctx.reply("Панель администратора:", adminRootKb());
   });
 
@@ -518,25 +669,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
-    let days: string[] = [];
-    try {
-      days = await listClosureDays(supabase);
-    } catch {
-      await ctx.reply(
-        "Таблица выходных не найдена. Выполните миграцию Supabase: closure_days."
-      );
-      return;
-    }
-    const rows: ReturnType<typeof Markup.button.callback>[][] = days.map(
-      (d) => [Markup.button.callback(`✕ ${d}`, `admin:closure:rm:${d}`)]
-    );
-    rows.push([Markup.button.callback("➕ Добавить день", "admin:closure:add")]);
-    rows.push([Markup.button.callback("« Назад", "admin:home")]);
-    const text =
-      days.length > 0
-        ? `Дни без записи (клиенты не видят слоты в эти даты):\n${days.join("\n")}`
-        : "Выходные дни не заданы. Добавьте дату — в этот день запись через бота недоступна.";
-    await ctx.reply(text, Markup.inlineKeyboard(rows));
+    await showAdminClosurePanel(ctx);
   });
 
   bot.action(/^admin:closure:rm:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
@@ -574,32 +707,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
-    const prices = await getServicePrices(supabase);
-    const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-    for (let i = 0; i < SERVICES.length; i += 2) {
-      const a = SERVICES[i];
-      const b = SERVICES[i + 1];
-      const line = [
-        Markup.button.callback(
-          `${a.buttonLabel} · ${prices[a.id] ?? 10} ₽`,
-          `admin:price:${a.id}`
-        ),
-      ];
-      if (b) {
-        line.push(
-          Markup.button.callback(
-            `${b.buttonLabel} · ${prices[b.id] ?? 10} ₽`,
-            `admin:price:${b.id}`
-          )
-        );
-      }
-      rows.push(line);
-    }
-    rows.push([Markup.button.callback("« Назад", "admin:home")]);
-    await ctx.reply(
-      "Цены услуг (информация для клиентов в разделе «Услуги»). Нажмите услугу, чтобы изменить:",
-      Markup.inlineKeyboard(rows)
-    );
+    await showAdminPricesPanel(ctx);
   });
 
   bot.action(/^admin:price:([a-z_]+)$/, async (ctx) => {
@@ -625,16 +733,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.reply(
-      "Слоты и записи:",
-      Markup.inlineKeyboard([
-        [
-          Markup.button.callback("Список слотов", "admin:cmd:slots"),
-          Markup.button.callback("Записи 14 дн.", "admin:cmd:bookings"),
-        ],
-        [Markup.button.callback("« Назад", "admin:home")],
-      ])
-    );
+    await showAdminSlotsMenu(ctx);
   });
 
   bot.action("admin:cmd:slots", async (ctx) => {
@@ -664,10 +763,10 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
             ? "ожидает оплату"
             : "свободен";
         const pub = s.is_published ? "" : " [не в ленте]";
-        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nid: ${s.id}`;
+        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nID слота: ${s.id}`;
       })
     );
-    await ctx.reply(lines.join("\n\n"));
+    await ctx.reply(lines.join("\n\n") + slotsListFooter);
   });
 
   bot.action("admin:cmd:bookings", async (ctx) => {
@@ -678,17 +777,12 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await ctx.answerCbQuery();
     const from = new Date().toISOString();
     const to = new Date(Date.now() + 14 * 86400_000).toISOString();
-    const list = await listConfirmedAppointments(supabase, from, to);
+    const list = await listAppointmentsInSlotRange(supabase, from, to);
     if (list.length === 0) {
-      await ctx.reply("Подтверждённых записей в ближайшие 14 дней нет.");
+      await ctx.reply("Записей в ближайшие 14 дней нет.");
       return;
     }
-    const text = list
-      .map(
-        (a) =>
-          `${formatSlotRu(a.slots.starts_at)}\n${a.clients.full_name ?? "—"} / ${a.clients.phone ?? "—"}\nзапись: ${a.id}`
-      )
-      .join("\n\n");
+    const text = list.map((a) => formatAdminBookingMessage(a)).join("\n\n");
     await ctx.reply(text);
   });
 
@@ -698,20 +792,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.reply(
-      [
-        "Текстовые команды (дублируют кнопки):",
-        "/slots — слоты",
-        "/addslot ГГГГ-ММ-ДД ЧЧ:ММ длительность_мин",
-        "/bookings — записи 14 дней",
-        "/cancel uuid — отменить запись",
-        "/move uuid_записи uuid_слота — перенос",
-        "/unpublishslot uuid — снять слот с публикации",
-        "/deleteslot uuid — удалить свободный слот",
-        "",
-        "Приветствие: settings.welcome_text JSON {\"text\":\"...\"}.",
-      ].join("\n")
-    );
+    await showAdminHelpText(ctx);
   });
 
   bot.command("slots", async (ctx) => {
@@ -740,10 +821,10 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
             ? "ожидает оплату"
             : "свободен";
         const pub = s.is_published ? "" : " [не в ленте]";
-        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nid: ${s.id}`;
+        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nID слота: ${s.id}`;
       })
     );
-    await ctx.reply(lines.join("\n\n"));
+    await ctx.reply(lines.join("\n\n") + slotsListFooter);
   });
 
   bot.command("addslot", async (ctx) => {
@@ -789,17 +870,12 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
     const from = new Date().toISOString();
     const to = new Date(Date.now() + 14 * 86400_000).toISOString();
-    const list = await listConfirmedAppointments(supabase, from, to);
+    const list = await listAppointmentsInSlotRange(supabase, from, to);
     if (list.length === 0) {
-      await ctx.reply("Подтверждённых записей в ближайшие 14 дней нет.");
+      await ctx.reply("Записей в ближайшие 14 дней нет.");
       return;
     }
-    const text = list
-      .map(
-        (a) =>
-          `${formatSlotRu(a.slots.starts_at)}\n${a.clients.full_name ?? "—"} / ${a.clients.phone ?? "—"}\nзапись: ${a.id}`
-      )
-      .join("\n\n");
+    const text = list.map((a) => formatAdminBookingMessage(a)).join("\n\n");
     await ctx.reply(text);
   });
 

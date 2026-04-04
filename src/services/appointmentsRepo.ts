@@ -210,6 +210,39 @@ export async function listConfirmedAppointments(
     );
 }
 
+/** Записи на приём в окне по времени слота: ожидает оплаты, подтверждена, отменена, завершена. */
+export async function listAppointmentsInSlotRange(
+  supabase: SupabaseClient,
+  fromIso: string,
+  toIso: string
+): Promise<AppointmentWithRelations[]> {
+  const { data, error } = await supabase
+    .from("appointments")
+    .select("*, slots(*), clients(*)")
+    .in("status", [
+      "pending_payment",
+      "confirmed",
+      "cancelled",
+      "completed",
+    ])
+    .limit(500);
+
+  if (error) throw error;
+
+  const rows = (data ?? []) as AppointmentWithRelations[];
+  return rows
+    .filter((r) => r.slots)
+    .filter((r) => {
+      const t = r.slots.starts_at;
+      return t >= fromIso && t <= toIso;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.slots.starts_at).getTime() -
+        new Date(b.slots.starts_at).getTime()
+    );
+}
+
 export async function getActiveAppointmentForClient(
   supabase: SupabaseClient,
   clientId: string
