@@ -1,5 +1,6 @@
 import { Telegraf, session, Markup } from "telegraf";
 import type { Context } from "telegraf";
+import type { ExtraEditMessageText } from "telegraf/typings/telegram-types.js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -58,12 +59,12 @@ function isAdmin(ctx: BotContext, env: Env): boolean {
 async function answerAndEditOrReplyText(
   ctx: BotContext,
   text: string,
-  extra?: Parameters<Context["reply"]>[1]
+  extra?: ExtraEditMessageText
 ): Promise<void> {
   const msg = ctx.callbackQuery?.message;
   await ctx.answerCbQuery();
   if (msg && "photo" in msg) {
-    await ctx.reply(text, extra);
+    await ctx.reply(text, extra as Parameters<BotContext["reply"]>[1]);
   } else if (ctx.callbackQuery && msg && "text" in msg) {
     await ctx.editMessageText(text, extra);
   }
