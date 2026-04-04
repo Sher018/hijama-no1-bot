@@ -2,10 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SlotRow } from "../db/types.js";
 import { listClosureDays } from "./closureDaysRepo.js";
 import { formatIrkutskDateOnly } from "../util/time.js";
+import { isWithinWorkingHours } from "../util/workingHours.js";
 
 export async function listAvailableSlots(
   supabase: SupabaseClient,
-  limit = 20
+  limit = 20,
+  workingHours?: { start: string; end: string }
 ): Promise<SlotRow[]> {
   const now = new Date().toISOString();
   const { data: slots, error: qErr } = await supabase
@@ -38,6 +40,15 @@ export async function listAvailableSlots(
   return list
     .filter((s) => !busy.has(s.id))
     .filter((s) => !closure.has(formatIrkutskDateOnly(s.starts_at)))
+    .filter((s) =>
+      workingHours
+        ? isWithinWorkingHours(
+            s.starts_at,
+            workingHours.start,
+            workingHours.end
+          )
+        : true
+    )
     .slice(0, limit);
 }
 

@@ -1,11 +1,21 @@
--- Примеры слотов для теста (Иркутск UTC+8). Подставьте свои даты в будущем.
--- Выполните в SQL Editor после миграций.
+-- Примеры слотов: начало в 14:00 и 10:00 по Иркутску (в графике 09:00–21:00).
+-- Раньше использовался now()+N days без времени — получались ночные слоты.
 
 insert into public.slots (starts_at, ends_at, is_published, is_booked)
 values
-  ((now() at time zone 'utc' + interval '2 days')::timestamptz,
-   (now() at time zone 'utc' + interval '2 days' + interval '60 minutes')::timestamptz,
-   true, false),
-  ((now() at time zone 'utc' + interval '3 days')::timestamptz,
-   (now() at time zone 'utc' + interval '3 days' + interval '60 minutes')::timestamptz,
-   true, false);
+  (
+    ((now() at time zone 'Asia/Irkutsk')::date + interval '2 days' + interval '14 hours')
+      at time zone 'Asia/Irkutsk',
+    ((now() at time zone 'Asia/Irkutsk')::date + interval '2 days' + interval '15 hours')
+      at time zone 'Asia/Irkutsk',
+    true,
+    false
+  ),
+  (
+    ((now() at time zone 'Asia/Irkutsk')::date + interval '3 days' + interval '10 hours')
+      at time zone 'Asia/Irkutsk',
+    ((now() at time zone 'Asia/Irkutsk')::date + interval '3 days' + interval '11 hours')
+      at time zone 'Asia/Irkutsk',
+    true,
+    false
+  );

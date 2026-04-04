@@ -29,6 +29,7 @@ import {
 import { createYookassaPayment } from "../services/yookassaClient.js";
 import { formatShortRu, formatSlotRu } from "../util/time.js";
 import { escapeHtml } from "../util/escapeHtml.js";
+import { isWithinWorkingHours } from "../util/workingHours.js";
 import {
   addClosureDay,
   listClosureDays,
@@ -267,7 +268,10 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
 
   bot.action("book", async (ctx) => {
     if (!ctx.from) return;
-    const slots = await listAvailableSlots(supabase, 15);
+    const slots = await listAvailableSlots(supabase, 15, {
+      start: env.WORKING_HOURS_START,
+      end: env.WORKING_HOURS_END,
+    });
     if (slots.length === 0) {
       await ctx.answerCbQuery("Свободных слотов нет");
       const empty =
@@ -275,7 +279,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         "• мастер ещё не добавил расписание в боте;\n" +
         "• выбран выходной день (мастер отметил день в «Админка → Выходные»);\n" +
         "• все окна уже заняты.\n\n" +
-        "Мастеру: /admin → слоты или команда /addslot в формате:\n" +
+        `Мастеру: слоты только в графике ${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END} (Иркутск). /admin или:\n` +
         "/addslot 2026-04-15 14:00 60\n\n" +
         "Клиентам: напишите нам в этот чат или зайдите позже.";
       const msg = ctx.callbackQuery?.message;
@@ -759,6 +763,18 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
     try {
       const { starts_at, ends_at } = parseIrkutskStartEnd(m[1], m[2], Number(m[3]));
+      if (
+        !isWithinWorkingHours(
+          starts_at,
+          env.WORKING_HOURS_START,
+          env.WORKING_HOURS_END
+        )
+      ) {
+        await ctx.reply(
+          `Начало сеанса вне графика клиники (${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END}, время Иркутска). Выберите другое время.`
+        );
+        return;
+      }
       const row = await insertSlot(supabase, { starts_at, ends_at });
       await ctx.reply(`Слот создан:\n${formatSlotRu(row.starts_at)}\nid: ${row.id}`);
     } catch {

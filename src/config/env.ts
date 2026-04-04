@@ -18,6 +18,16 @@ function normalizePublicBaseUrl(v: unknown): string | undefined {
   return s.replace(/\/+$/, "");
 }
 
+function normalizeHHMM(v: unknown, fallback: string): string {
+  const raw = v === undefined || v === "" ? fallback : String(v).trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return fallback;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
 const schema = z.object({
   BOT_TOKEN: z.string().min(1),
   BOT_USERNAME: z.string().min(1),
@@ -47,6 +57,17 @@ const schema = z.object({
     .optional()
     .transform((v) => v === "true"),
   PORT: z.coerce.number().int().positive().default(3000),
+
+  /** Начало рабочего дня (Иркутск), показ слотов и /addslot */
+  WORKING_HOURS_START: z.preprocess(
+    (v) => normalizeHHMM(v, "09:00"),
+    z.string()
+  ),
+  /** Конец окна записи включительно (Иркутск), напр. 21:00 — можно старт в 21:00 */
+  WORKING_HOURS_END: z.preprocess(
+    (v) => normalizeHHMM(v, "21:00"),
+    z.string()
+  ),
 });
 
 export type Env = z.infer<typeof schema>;
