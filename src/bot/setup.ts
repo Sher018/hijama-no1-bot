@@ -1,6 +1,5 @@
 import { Telegraf, session, Markup } from "telegraf";
 import type { Context } from "telegraf";
-import type { ExtraEditMessageText } from "telegraf/typings/telegram-types.js";
 import { randomUUID } from "node:crypto";
 import type { Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -52,6 +51,11 @@ interface SessionData {
 
 type BotContext = Context & { session?: SessionData };
 
+/** Только inline-клавиатура, как у editMessageText (без deep-import из telegraf/typings). */
+type InlineMessageExtra = NonNullable<
+  Parameters<BotContext["editMessageText"]>[1]
+>;
+
 function isAdmin(ctx: BotContext, env: Env): boolean {
   return ctx.from?.id === env.ADMIN_TELEGRAM_ID;
 }
@@ -59,7 +63,7 @@ function isAdmin(ctx: BotContext, env: Env): boolean {
 async function answerAndEditOrReplyText(
   ctx: BotContext,
   text: string,
-  extra?: ExtraEditMessageText
+  extra?: InlineMessageExtra
 ): Promise<void> {
   const msg = ctx.callbackQuery?.message;
   await ctx.answerCbQuery();
