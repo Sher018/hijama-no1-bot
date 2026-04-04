@@ -20,8 +20,8 @@ const stopSchedulers = startSchedulers(env, supabase, bot);
 const server = app.listen(env.PORT, async () => {
   console.log(`HTTP listening on :${env.PORT}`);
   try {
-    await syncTelegramWebhook(bot, env, !usePolling);
-    if (usePolling) {
+    const { mode } = await syncTelegramWebhook(bot, env, !usePolling);
+    if (mode === "polling" || usePolling) {
       await bot.launch();
       console.log("Telegram bot: long polling");
     }

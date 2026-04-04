@@ -33,18 +33,31 @@ export function createHttpServer(
   return app;
 }
 
+export type TelegramDeliveryMode = "webhook" | "polling";
+
+/** Регистрирует webhook; при ошибке (неверный DNS, Telegram не видит хост) — polling без падения процесса. */
 export async function syncTelegramWebhook(
   bot: Telegraf,
   env: Env,
   useWebhook: boolean
-): Promise<void> {
+): Promise<{ mode: TelegramDeliveryMode; webhookUrl?: string }> {
   const base = env.PUBLIC_BASE_URL?.replace(/\/$/, "");
   if (useWebhook && base) {
     const url = `${base}${TELEGRAM_WEBHOOK_PATH}`;
-    await bot.telegram.setWebhook(url);
-    console.log(`Telegram webhook: ${url}`);
-  } else {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    console.log("Telegram: long polling");
+    try {
+      await bot.telegram.setWebhook(url);
+      console.log(`Telegram webhook: ${url}`);
+      return { mode: "webhook", webhookUrl: url };
+    } catch (e) {
+      console.error(
+        "setWebhook не удался (проверьте PUBLIC_BASE_URL в браузере и раздел «Домены» в Amvera). Переход на long polling.",
+        e
+      );
+      await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+      return { mode: "polling" };
+    }
   }
+  await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+  console.log("Telegram: long polling");
+  return { mode: "polling" };
 }

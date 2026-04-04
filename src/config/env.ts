@@ -1,6 +1,23 @@
 import { z } from "zod";
 import "dotenv/config";
 
+/** Убирает пробелы/кавычки из UI; при отсутствии схемы добавляет https:// */
+function normalizePublicBaseUrl(v: unknown): string | undefined {
+  if (v === "" || v === undefined) return undefined;
+  let s = String(v).trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  if (!s) return undefined;
+  if (!/^https?:\/\//i.test(s)) {
+    s = `https://${s}`;
+  }
+  return s.replace(/\/+$/, "");
+}
+
 const schema = z.object({
   BOT_TOKEN: z.string().min(1),
   BOT_USERNAME: z.string().min(1),
@@ -14,7 +31,7 @@ const schema = z.object({
     ),
 
   PUBLIC_BASE_URL: z.preprocess(
-    (v) => (v === "" || v === undefined ? undefined : v),
+    (v) => normalizePublicBaseUrl(v),
     z.string().url().optional()
   ),
   SUPABASE_URL: z.string().url(),
