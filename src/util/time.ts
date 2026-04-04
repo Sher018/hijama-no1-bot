@@ -21,3 +21,13 @@ export function formatShortRu(iso: string): string {
     minute: "2-digit",
   }).format(new Date(iso));
 }
+
+/** Дата календаря в Иркутске для слота (UTC → Asia/Irkutsk), формат YYYY-MM-DD */
+export function formatIrkutskDateOnly(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
+}

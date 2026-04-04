@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SlotRow } from "../db/types.js";
+import { listClosureDays } from "./closureDaysRepo.js";
+import { formatIrkutskDateOnly } from "../util/time.js";
 
 export async function listAvailableSlots(
   supabase: SupabaseClient,
@@ -13,7 +15,7 @@ export async function listAvailableSlots(
     .eq("is_booked", false)
     .gte("starts_at", now)
     .order("starts_at", { ascending: true })
-    .limit(limit * 2);
+    .limit(limit * 3);
 
   if (qErr) throw qErr;
   const list = (slots ?? []) as SlotRow[];
@@ -26,7 +28,17 @@ export async function listAvailableSlots(
   if (pErr) throw pErr;
   const busy = new Set((pending ?? []).map((r: { slot_id: string }) => r.slot_id));
 
-  return list.filter((s) => !busy.has(s.id)).slice(0, limit);
+  let closure = new Set<string>();
+  try {
+    closure = new Set(await listClosureDays(supabase));
+  } catch {
+    /* таблица closure_days ещё не создана — не фильтруем */
+  }
+
+  return list
+    .filter((s) => !busy.has(s.id))
+    .filter((s) => !closure.has(formatIrkutskDateOnly(s.starts_at)))
+    .slice(0, limit);
 }
 
 export async function getSlot(
