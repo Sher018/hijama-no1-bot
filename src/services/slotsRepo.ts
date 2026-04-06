@@ -65,6 +65,21 @@ export async function getSlot(
   return data as SlotRow | null;
 }
 
+/** Сколько слотов начинается в полуинтервале [fromInclusive, toExclusive). */
+export async function countSlotsStartingInRange(
+  supabase: SupabaseClient,
+  fromInclusive: string,
+  toExclusive: string
+): Promise<number> {
+  const { count, error } = await supabase
+    .from("slots")
+    .select("*", { count: "exact", head: true })
+    .gte("starts_at", fromInclusive)
+    .lt("starts_at", toExclusive);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 export async function insertSlot(
   supabase: SupabaseClient,
   row: Pick<SlotRow, "starts_at" | "ends_at"> & { is_published?: boolean }

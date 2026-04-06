@@ -1,5 +1,56 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppointmentRow, AppointmentWithRelations } from "../db/types.js";
+import { irkutskCurrentMonthStartUtcIso } from "../util/time.js";
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Удаляет записи и слоты, у которых начало сеанса раньше первого числа текущего месяца (Иркутск).
+ * Вызывается планировщиком (например, после смены месяца данные прошлых месяцев уходят из БД).
+ */
+export async function purgeOldSlotsAndAppointments(
+  supabase: SupabaseClient
+): Promise<{ deletedAppointments: number; deletedSlots: number }> {
+  const cutoff = irkutskCurrentMonthStartUtcIso();
+
+  const { data: oldSlots, error: qErr } = await supabase
+    .from("slots")
+    .select("id")
+    .lt("starts_at", cutoff);
+  if (qErr) throw qErr;
+  const slotIds = (oldSlots ?? []).map((r: { id: string }) => r.id);
+  if (slotIds.length === 0) {
+    return { deletedAppointments: 0, deletedSlots: 0 };
+  }
+
+  let deletedAppointments = 0;
+  for (const part of chunk(slotIds, 80)) {
+    const { data: delApt, error: eA } = await supabase
+      .from("appointments")
+      .delete()
+      .in("slot_id", part)
+      .select("id");
+    if (eA) throw eA;
+    deletedAppointments += delApt?.length ?? 0;
+  }
+
+  let deletedSlots = 0;
+  for (const part of chunk(slotIds, 80)) {
+    const { data: delSl, error: eS } = await supabase
+      .from("slots")
+      .delete()
+      .in("id", part)
+      .select("id");
+    if (eS) throw eS;
+    deletedSlots += delSl?.length ?? 0;
+  }
+
+  return { deletedAppointments, deletedSlots };
+}
 
 export async function createPendingAppointment(
   supabase: SupabaseClient,

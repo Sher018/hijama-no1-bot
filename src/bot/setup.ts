@@ -21,6 +21,7 @@ import {
   listAvailableSlots,
   getSlot,
   insertSlot,
+  countSlotsStartingInRange,
   listSlotsAdmin,
   deleteSlotIfFree,
   setSlotPublished,
@@ -31,7 +32,13 @@ import {
 } from "../services/settingsRepo.js";
 import { createYookassaPayment } from "../services/yookassaClient.js";
 import { syncPendingPaymentFromYookassaApi } from "../services/paymentConfirmation.js";
-import { formatShortRu, formatSlotRu } from "../util/time.js";
+import {
+  formatShortRu,
+  formatSlotRu,
+  irkutskDayUtcRange,
+  isoYmdToDdMmYyyy,
+  ddMmYyyyToIsoYmd,
+} from "../util/time.js";
 import { escapeHtml } from "../util/escapeHtml.js";
 import { isWithinWorkingHours } from "../util/workingHours.js";
 import {
@@ -178,6 +185,7 @@ async function replyPendingPayment(
   );
 }
 
+/** dateStr — YYYY-MM-DD (календарь Иркутска). */
 function parseIrkutskStartEnd(
   dateStr: string,
   timeStr: string,
@@ -393,7 +401,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         "• выбран выходной день (мастер отметил день в «Админка → Выходные»);\n" +
         "• все окна уже заняты.\n\n" +
         `Мастеру: слоты только в графике ${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END} (Иркутск). /admin или:\n` +
-        "/addslot 2026-04-15 14:00 60\n\n" +
+        "/добавить_слот 15-04-2026 14:00 60\n\n" +
         "Клиентам: напишите нам в этот чат или зайдите позже.";
       const msg = ctx.callbackQuery?.message;
       if (msg && "photo" in msg) {
@@ -467,13 +475,18 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     const rows: ReturnType<typeof Markup.button.callback>[][] = days.map(
-      (d) => [Markup.button.callback(`✕ ${d}`, `admin:closure:rm:${d}`)]
+      (d) => [
+        Markup.button.callback(
+          `✕ ${isoYmdToDdMmYyyy(d)}`,
+          `admin:closure:rm:${d}`
+        ),
+      ]
     );
     rows.push([Markup.button.callback("➕ Добавить день", "admin:closure:add")]);
     rows.push([Markup.button.callback("« Назад", "admin:home")]);
     const text =
       days.length > 0
-        ? `Дни без записи (клиенты не видят слоты в эти даты):\n${days.join("\n")}`
+        ? `Дни без записи (клиенты не видят слоты в эти даты):\n${days.map((d) => isoYmdToDdMmYyyy(d)).join("\n")}`
         : "Выходные дни не заданы. Добавьте дату — в этот день запись через бота недоступна.";
     await ctx.reply(text, Markup.inlineKeyboard(rows));
   }
@@ -527,22 +540,19 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   async function showAdminHelpText(ctx: BotContext) {
     await ctx.reply(
       [
-        "Текстовые команды (дублируют кнопки):",
-        "/slots — слоты",
-        "/addslot ГГГГ-ММ-ДД ЧЧ:ММ длительность_мин",
-        "/bookings — записи 14 дней",
-        "/cancel uuid — отменить запись",
-        "/move uuid_записи uuid_слота — перенос",
-        "/unpublishslot uuid — снять слот с публикации",
-        "/deleteslot uuid — удалить свободный слот",
+        "Команды (есть русские и английские варианты):",
+        "/слоты или /slots — список слотов",
+        "/добавить_слот или /addslot ДД-ММ-ГГГГ ЧЧ:ММ длительность_мин",
+        "/записи или /bookings — записи за 14 дней",
+        "/отменить или /cancel <uuid записи> — отменить запись",
+        "/перенести или /move <uuid записи> <uuid нового слота>",
+        "/снять_слот или /unpublishslot <uuid слота> — убрать слот из ленты",
+        "/удалить_слот или /deleteslot <uuid слота> — удалить свободный слот",
         "",
-        "Приветствие: settings.welcome_text JSON {\"text\":\"...\"}.",
+        "UUID копируйте из списка записей (/записи) или при необходимости из БД.",
       ].join("\n")
     );
   }
-
-  const slotsListFooter =
-    "\n\n—\nID слота — uuid записи в таблице слотов (public.slots). Нужен для /deleteslot, /unpublishslot и /move (второй аргумент — uuid слота).";
 
   bot.on("text", async (ctx, next) => {
     if (!ctx.from) return next();
@@ -571,18 +581,27 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       isAdmin(ctx as BotContext, env)
     ) {
       const text = ctx.message.text.trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      if (/^\d{2}-\d{2}-\d{4}$/.test(text)) {
+        const iso = ddMmYyyyToIsoYmd(text);
+        if (!iso) {
+          await ctx.reply("Неверная дата. Или /admin — отмена.");
+          return;
+        }
         try {
-          await addClosureDay(supabase, text);
+          await addClosureDay(supabase, iso);
           ctx.session = {};
-          await ctx.reply(`Выходной день ${text} сохранён. Клиенты не увидят слоты в эту дату.`);
+          await ctx.reply(
+            `Выходной день ${text} сохранён. Клиенты не увидят слоты в эту дату.`
+          );
         } catch (e) {
           console.error(e);
           await ctx.reply("Не удалось сохранить. Проверьте миграции БД (таблица closure_days).");
         }
         return;
       }
-      await ctx.reply("Укажите дату в формате ГГГГ-ММ-ДД, например 2026-04-15. Или /admin — отмена.");
+      await ctx.reply(
+        "Укажите дату в формате ДД-ММ-ГГГГ, например 15-04-2026. Или /admin — отмена."
+      );
       return;
     }
 
@@ -754,7 +773,9 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await ctx.answerCbQuery();
     try {
       await removeClosureDay(supabase, day);
-      await ctx.reply(`День ${day} удалён из выходных.`);
+      await ctx.reply(
+        `День ${isoYmdToDdMmYyyy(day)} удалён из выходных.`
+      );
     } catch (e) {
       console.error(e);
       await ctx.reply("Не удалось удалить.");
@@ -770,7 +791,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     ctx.session ??= {};
     ctx.session.step = "admin_closure";
     await ctx.reply(
-      "Введите дату выходного дня в формате ГГГГ-ММ-ДД (по календарю Иркутска для слотов), например 2026-05-01."
+      "Введите дату выходного дня в формате ДД-ММ-ГГГГ (календарь Иркутска для слотов), например 01-05-2026."
     );
   });
 
@@ -836,10 +857,10 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
             ? "ожидает оплату"
             : "свободен";
         const pub = s.is_published ? "" : " [не в ленте]";
-        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nID слота: ${s.id}`;
+        return `${formatShortRu(s.starts_at)} — ${st}${pub}`;
       })
     );
-    await ctx.reply(lines.join("\n\n") + slotsListFooter);
+    await ctx.reply(lines.join("\n\n"));
   });
 
   bot.action("admin:cmd:bookings", async (ctx) => {
@@ -868,7 +889,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await showAdminHelpText(ctx);
   });
 
-  bot.command("slots", async (ctx) => {
+  bot.command(["slots", "слоты"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
@@ -894,29 +915,34 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
             ? "ожидает оплату"
             : "свободен";
         const pub = s.is_published ? "" : " [не в ленте]";
-        return `${formatShortRu(s.starts_at)} — ${st}${pub}\nID слота: ${s.id}`;
+        return `${formatShortRu(s.starts_at)} — ${st}${pub}`;
       })
     );
-    await ctx.reply(lines.join("\n\n") + slotsListFooter);
+    await ctx.reply(lines.join("\n\n"));
   });
 
-  bot.command("addslot", async (ctx) => {
+  bot.command(["addslot", "добавить_слот"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
     }
-    const raw = ctx.message.text.replace(/^\/addslot\s*/i, "").trim();
+    const raw = ctx.message.text.replace(/^\/\S+\s*/, "").trim();
     const m = raw.match(
-      /^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s+(\d+)\s*$/i
+      /^(\d{2})-(\d{2})-(\d{4})\s+(\d{1,2}:\d{2})\s+(\d+)\s*$/i
     );
     if (!m) {
       await ctx.reply(
-        "Формат: /addslot ГГГГ-ММ-ДД ЧЧ:ММ длительность_мин\nПример: /addslot 2026-04-10 14:00 60"
+        "Формат: /добавить_слот ДД-ММ-ГГГГ ЧЧ:ММ длительность_мин\n(англ.: /addslot …)\nПример: /добавить_слот 10-04-2026 14:00 60"
       );
       return;
     }
     try {
-      const { starts_at, ends_at } = parseIrkutskStartEnd(m[1], m[2], Number(m[3]));
+      const ymd = `${m[3]}-${m[2]}-${m[1]}`;
+      const { starts_at, ends_at } = parseIrkutskStartEnd(
+        ymd,
+        m[4],
+        Number(m[5])
+      );
       if (
         !isWithinWorkingHours(
           starts_at,
@@ -929,14 +955,26 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         );
         return;
       }
+      const { fromInclusive, toExclusive } = irkutskDayUtcRange(ymd);
+      const already = await countSlotsStartingInRange(
+        supabase,
+        fromInclusive,
+        toExclusive
+      );
+      if (already >= env.MAX_SLOTS_PER_DAY) {
+        await ctx.reply(
+          `На этот день уже ${env.MAX_SLOTS_PER_DAY} слотов (лимит по графику). Удалите слот (/удалить_слот) или выберите другую дату.`
+        );
+        return;
+      }
       const row = await insertSlot(supabase, { starts_at, ends_at });
-      await ctx.reply(`Слот создан:\n${formatSlotRu(row.starts_at)}\nid: ${row.id}`);
+      await ctx.reply(`Слот создан:\n${formatSlotRu(row.starts_at)}`);
     } catch {
       await ctx.reply("Не удалось разобрать дату/время. Проверьте формат.");
     }
   });
 
-  bot.command("bookings", async (ctx) => {
+  bot.command(["bookings", "записи"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
@@ -952,14 +990,16 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await ctx.reply(text);
   });
 
-  bot.command("cancel", async (ctx) => {
+  bot.command(["cancel", "отменить"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
     }
     const id = ctx.message.text.split(/\s+/)[1]?.trim();
     if (!id) {
-      await ctx.reply("Укажите ID записи: /cancel и uuid через пробел.");
+      await ctx.reply(
+        "Укажите номер записи (uuid): /отменить <uuid> или /cancel <uuid>"
+      );
       return;
     }
     const apt = await cancelAppointmentByAdmin(supabase, id);
@@ -978,7 +1018,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await ctx.reply("Запись отменена, клиент уведомлён (если бот не заблокирован).");
   });
 
-  bot.command("move", async (ctx) => {
+  bot.command(["move", "перенести"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
@@ -987,7 +1027,9 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     const aid = parts[1];
     const sid = parts[2];
     if (!aid || !sid) {
-      await ctx.reply("Формат: /move uuid_записи uuid_нового_слота");
+      await ctx.reply(
+        "Формат: /перенести <uuid записи> <uuid нового слота>\n(англ.: /move …)"
+      );
       return;
     }
     const res = await moveAppointmentToSlot(supabase, aid, sid);
@@ -1009,28 +1051,32 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await ctx.reply("Перенос выполнен.");
   });
 
-  bot.command("unpublishslot", async (ctx) => {
+  bot.command(["unpublishslot", "снять_слот"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
     }
     const id = ctx.message.text.split(/\s+/)[1]?.trim();
     if (!id) {
-      await ctx.reply("Формат: /unpublishslot uuid_слота");
+      await ctx.reply(
+        "Формат: /снять_слот <uuid слота>\n(англ.: /unpublishslot …)"
+      );
       return;
     }
     await setSlotPublished(supabase, id, false);
     await ctx.reply("Слот снят с публикации (если существовал).");
   });
 
-  bot.command("deleteslot", async (ctx) => {
+  bot.command(["deleteslot", "удалить_слот"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
     }
     const id = ctx.message.text.split(/\s+/)[1]?.trim();
     if (!id) {
-      await ctx.reply("Формат: /deleteslot uuid_слота");
+      await ctx.reply(
+        "Формат: /удалить_слот <uuid слота>\n(англ.: /deleteslot …)"
+      );
       return;
     }
     const r = await deleteSlotIfFree(supabase, id);

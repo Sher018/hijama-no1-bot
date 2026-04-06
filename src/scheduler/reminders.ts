@@ -5,6 +5,7 @@ import {
   expireStalePendingAppointments,
   fetchAppointmentsForReminder,
   markReminderSent,
+  purgeOldSlotsAndAppointments,
 } from "../services/appointmentsRepo.js";
 import { formatSlotRu } from "../util/time.js";
 
@@ -17,6 +18,18 @@ export function startSchedulers(
   bot: Telegraf
 ): () => void {
   const tick = async () => {
+    try {
+      const { deletedAppointments, deletedSlots } =
+        await purgeOldSlotsAndAppointments(supabase);
+      if (deletedAppointments > 0 || deletedSlots > 0) {
+        console.log(
+          `Очистка прошлых периодов: записей ${deletedAppointments}, слотов ${deletedSlots}`
+        );
+      }
+    } catch (e) {
+      console.error("purgeOldSlotsAndAppointments", e);
+    }
+
     try {
       const n = await expireStalePendingAppointments(supabase, PENDING_TTL_MIN);
       if (n > 0) console.log(`Истекло ожидание оплаты, отменено записей: ${n}`);

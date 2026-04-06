@@ -68,6 +68,9 @@ const schema = z.object({
     (v) => normalizeHHMM(v, "21:00"),
     z.string()
   ),
+
+  /** Максимум слотов на один календарный день (Иркутск), в пределах графика WORKING_HOURS_* */
+  MAX_SLOTS_PER_DAY: z.coerce.number().int().positive().default(5),
 });
 
 export type Env = z.infer<typeof schema>;
