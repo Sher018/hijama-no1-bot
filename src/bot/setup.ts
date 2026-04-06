@@ -6,6 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AppointmentStatus,
   AppointmentWithRelations,
+  SlotRow,
 } from "../db/types.js";
 import { upsertClient, getClientByTelegramId } from "../services/clientsRepo.js";
 import {
@@ -32,9 +33,13 @@ import {
 } from "../services/settingsRepo.js";
 import { createYookassaPayment } from "../services/yookassaClient.js";
 import { syncPendingPaymentFromYookassaApi } from "../services/paymentConfirmation.js";
+import { formatSelectedProcedureLine } from "../services/procedureLine.js";
 import {
   formatShortRu,
   formatSlotRu,
+  formatIrkutskDateOnly,
+  formatDdMmDot,
+  formatIrkutskTimeHm,
   irkutskDayUtcRange,
   isoYmdToDdMmYyyy,
   ddMmYyyyToIsoYmd,
@@ -62,6 +67,8 @@ interface SessionData {
   slotId?: string;
   tempName?: string;
   adminPriceServiceId?: string;
+  /** услуга из раздела «Услуги» (для цены в сообщении об оплате) */
+  selectedServiceId?: string;
   /** message_id приветствия — не удалять при навигации по кнопкам */
   welcomeMessageId?: number;
 }
@@ -112,6 +119,60 @@ function formatAdminBookingMessage(a: AppointmentWithRelations): string {
   ].join("\n");
 }
 
+/** До 7 колонок: дата в первой строке, под ней — времена этого дня. */
+const SLOT_BOOK_GRID_MAX_DAYS = 7;
+
+function buildBookSlotGridRows(slots: SlotRow[]) {
+  const byDate = new Map<string, SlotRow[]>();
+  for (const s of slots) {
+    const d = formatIrkutskDateOnly(s.starts_at);
+    const arr = byDate.get(d) ?? [];
+    arr.push(s);
+    byDate.set(d, arr);
+  }
+  const dates = [...byDate.keys()].sort();
+  const colCount = Math.min(SLOT_BOOK_GRID_MAX_DAYS, dates.length);
+  const columns: SlotRow[][] = [];
+  for (let i = 0; i < colCount; i++) {
+    const ymd = dates[i];
+    const list = (byDate.get(ymd) ?? []).sort(
+      (a, b) =>
+        new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()
+    );
+    columns.push(list);
+  }
+  const maxRows = Math.max(0, ...columns.map((c) => c.length));
+
+  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
+
+  rows.push(
+    columns.map((col) => {
+      const slot0 = col[0];
+      const label = slot0
+        ? telegramInlineButtonText(formatDdMmDot(slot0.starts_at))
+        : "—";
+      return Markup.button.callback(label, "book:noop");
+    })
+  );
+
+  for (let r = 0; r < maxRows; r++) {
+    rows.push(
+      columns.map((col) => {
+        const slot = col[r];
+        if (slot) {
+          return Markup.button.callback(
+            telegramInlineButtonText(formatIrkutskTimeHm(slot.starts_at)),
+            `slot:${slot.id}`
+          );
+        }
+        return Markup.button.callback("…", "book:noop");
+      })
+    );
+  }
+  rows.push([Markup.button.callback("« Назад", "menu:main")]);
+  return rows;
+}
+
 async function deleteMessageIfNotWelcome(
   ctx: BotContext,
   messageId: number | undefined
@@ -150,6 +211,7 @@ async function replyPendingPayment(
   await syncPendingPaymentFromYookassaApi(env, supabase, bot, active.id);
   const fresh = await getAppointmentById(supabase, active.id);
   const cur = fresh ?? active;
+  const procLine = await formatSelectedProcedureLine(supabase, cur.notes);
   if (cur.status === "confirmed") {
     await ctx.reply(
       [
@@ -157,6 +219,7 @@ async function replyPendingPayment(
         "",
         `Время: ${formatSlotRu(cur.slots.starts_at)}`,
         `Предоплата: ${cur.prepayment_rub} ₽`,
+        ...(procLine ? ["", procLine] : []),
         "",
         "До встречи в клинике «Хиджама №1».",
       ].join("\n")
@@ -166,14 +229,19 @@ async function replyPendingPayment(
   const lines = [
     "У вас есть запись, ожидающая оплаты.",
     `Время: ${formatSlotRu(cur.slots.starts_at)}`,
+    ...(procLine ? [procLine] : []),
     "",
     "После оплаты вы вернётесь в бот — придёт подтверждение.",
+    "",
+    "Если оплата прошла, а подтверждение не пришло — нажмите /start или отправьте любое сообщение боту.",
   ];
   const url = cur.yookassa_confirmation_url;
   if (url) {
     await ctx.reply(
       lines.join("\n"),
-      Markup.inlineKeyboard([[Markup.button.url("Оплатить 500 ₽", url)]])
+      Markup.inlineKeyboard([
+        [Markup.button.url(`Оплатить ${cur.prepayment_rub} ₽`, url)],
+      ])
     );
     return;
   }
@@ -189,11 +257,27 @@ async function replyPendingPayment(
 export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContext> {
   const bot = new Telegraf<BotContext>(env.BOT_TOKEN);
 
+  const pendingSyncThrottle = new Map<number, number>();
+
   bot.use(
     session({
       defaultSession: (): SessionData => ({}),
     })
   );
+
+  bot.use(async (ctx, next) => {
+    if (!ctx.from || ctx.chat?.type !== "private") return next();
+    const uid = ctx.from.id;
+    const now = Date.now();
+    if (now - (pendingSyncThrottle.get(uid) ?? 0) < 25_000) return next();
+    pendingSyncThrottle.set(uid, now);
+    const client = await getClientByTelegramId(supabase, ctx.from.id);
+    if (!client) return next();
+    const active = await getActiveAppointmentForClient(supabase, client.id);
+    if (active?.status !== "pending_payment") return next();
+    await syncPendingPaymentFromYookassaApi(env, supabase, bot, active.id);
+    return next();
+  });
 
   bot.start(async (ctx) => {
     if (!ctx.from) return;
@@ -249,6 +333,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     if (!ctx.from) return;
     await ctx.answerCbQuery();
     ctx.session ??= {};
+    delete ctx.session.selectedServiceId;
     const msg = ctx.callbackQuery?.message;
     const wid = ctx.session.welcomeMessageId;
     if (msg && wid !== undefined && msg.message_id !== wid) {
@@ -309,6 +394,8 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
+    ctx.session ??= {};
+    ctx.session.selectedServiceId = id;
     const prev = ctx.callbackQuery?.message;
     if (prev) {
       await deleteMessageIfNotWelcome(ctx, prev.message_id);
@@ -398,15 +485,19 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
 
-    const rows = slots.map((s) => [
-      Markup.button.callback(formatShortRu(s.starts_at), `slot:${s.id}`),
-    ]);
-    rows.push([Markup.button.callback("« Назад", "menu:main")]);
+    const rows = buildBookSlotGridRows(slots);
     await answerAndEditOrReplyText(
       ctx,
-      "Выберите время сеанса:",
+      [
+        "Выберите время сеанса:",
+        "Первая строка — даты (Иркутск), ниже — свободные окна в колонке дня.",
+      ].join("\n"),
       Markup.inlineKeyboard(rows)
     );
+  });
+
+  bot.action("book:noop", async (ctx) => {
+    await ctx.answerCbQuery();
   });
 
   bot.action(/^slot:([0-9a-f-]{36})$/i, async (ctx) => {
@@ -724,12 +815,16 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       });
 
       const idempotencyKey = randomUUID();
+      const notes = ctx.session.selectedServiceId
+        ? JSON.stringify({ service_id: ctx.session.selectedServiceId })
+        : null;
       let appointment;
       try {
         appointment = await createPendingAppointment(supabase, {
           slot_id: slotId,
           client_id: client.id,
           idempotency_key: idempotencyKey,
+          notes,
         });
       } catch {
         ctx.session = {};
@@ -766,16 +861,27 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         confirmationUrl: payment.confirmationUrl,
       });
 
+      const procLine = await formatSelectedProcedureLine(
+        supabase,
+        appointment.notes
+      );
       ctx.session = {};
       await ctx.reply(
         [
-          "Спасибо! Осталось внести предоплату 500 ₽.",
-          `Стоимость сеанса на месте: ${appointment.session_price_min_rub}–${appointment.session_price_max_rub} ₽.`,
+          `Спасибо! Осталось внести предоплату ${appointment.prepayment_rub} ₽.`,
+          ...(procLine ? [procLine] : []),
           "",
           "После оплаты вы вернётесь в этот чат — придёт сообщение с подтверждением записи.",
+          "",
+          "Если оплата прошла, а сообщение не пришло — нажмите /start или отправьте любое сообщение боту.",
         ].join("\n"),
         Markup.inlineKeyboard([
-          [Markup.button.url("Оплатить 500 ₽", payment.confirmationUrl)],
+          [
+            Markup.button.url(
+              `Оплатить ${appointment.prepayment_rub} ₽`,
+              payment.confirmationUrl
+            ),
+          ],
         ])
       );
       return;

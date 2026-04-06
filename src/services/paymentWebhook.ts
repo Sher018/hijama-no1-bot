@@ -106,7 +106,7 @@ export function createYookassaWebhookHandler(
       );
 
       if (changed && after && after.status === "confirmed") {
-        await notifyAfterSuccessfulPayment(env, bot, after);
+        await notifyAfterSuccessfulPayment(env, supabase, bot, after);
       }
 
       await insertPaymentEvent(supabase, yookassaEventId, appointmentId, body);

@@ -6,11 +6,13 @@ import {
   getAppointmentById,
   tryConfirmAppointment,
 } from "./appointmentsRepo.js";
+import { formatSelectedProcedureLine } from "./procedureLine.js";
 import { getYookassaPayment } from "./yookassaClient.js";
 import { formatSlotRu } from "../util/time.js";
 
 export async function notifyAfterSuccessfulPayment(
   env: Env,
+  supabase: SupabaseClient,
   bot: Telegraf,
   after: AppointmentWithRelations
 ): Promise<void> {
@@ -18,6 +20,7 @@ export async function notifyAfterSuccessfulPayment(
   const clientTg = after.clients.telegram_user_id;
   const name = after.clients.full_name ?? "Клиент";
   const phone = after.clients.phone ?? "—";
+  const procLine = await formatSelectedProcedureLine(supabase, after.notes);
 
   try {
     await bot.telegram.sendMessage(
@@ -27,7 +30,7 @@ export async function notifyAfterSuccessfulPayment(
         "",
         `Дата и время: ${when}`,
         `Предоплата: ${after.prepayment_rub} ₽`,
-        `Стоимость сеанса на месте: ${after.session_price_min_rub}–${after.session_price_max_rub} ₽`,
+        ...(procLine ? [procLine] : []),
         "",
         "До встречи в клинике «Хиджама №1».",
       ].join("\n")
@@ -81,6 +84,6 @@ export async function syncPendingPaymentFromYookassaApi(
   if (!changed || !after || after.status !== "confirmed") {
     return false;
   }
-  await notifyAfterSuccessfulPayment(env, bot, after);
+  await notifyAfterSuccessfulPayment(env, supabase, bot, after);
   return true;
 }

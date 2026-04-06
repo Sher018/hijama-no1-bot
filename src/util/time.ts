@@ -9,6 +9,27 @@ function formatTimeHm(iso: string): string {
   }).format(new Date(iso));
 }
 
+/** Дата в Иркутске: ДД.ММ (для заголовков колонок в сетке слотов). */
+export function formatDdMmDot(iso: string): string {
+  const d = new Date(iso);
+  const s = new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ,
+    day: "2-digit",
+    month: "2-digit",
+  }).format(d);
+  return s.replace(/\//g, ".");
+}
+
+/** Время в Иркутске: ЧЧ:ММ */
+export function formatIrkutskTimeHm(iso: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+}
+
 /** Дата в Иркутске: ДД-ММ-ГГГГ */
 export function formatDdMmYyyy(iso: string): string {
   const d = new Date(iso);
