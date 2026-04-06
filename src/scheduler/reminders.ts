@@ -7,6 +7,7 @@ import {
   markReminderSent,
   purgeOldSlotsAndAppointments,
 } from "../services/appointmentsRepo.js";
+import { ensureStandardDailySlots } from "../services/autoSlots.js";
 import { formatSlotRu } from "../util/time.js";
 
 const TICK_MS = 120_000;
@@ -28,6 +29,12 @@ export function startSchedulers(
       }
     } catch (e) {
       console.error("purgeOldSlotsAndAppointments", e);
+    }
+
+    try {
+      await ensureStandardDailySlots(supabase, env);
+    } catch (e) {
+      console.error("ensureStandardDailySlots", e);
     }
 
     try {

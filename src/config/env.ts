@@ -71,6 +71,15 @@ const schema = z.object({
 
   /** Максимум слотов на один календарный день (Иркутск), в пределах графика WORKING_HOURS_* */
   MAX_SLOTS_PER_DAY: z.coerce.number().int().positive().default(5),
+
+  /** Автослоты: 5 окон в день (10,13,15,17,19 Иркутск). false — только ручное /addslot */
+  AUTO_SLOTS_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false" && v !== "0"),
+
+  /** На сколько дней вперёд поддерживать автослоты (включая сегодня) */
+  AUTO_SLOTS_HORIZON_DAYS: z.coerce.number().int().positive().max(90).default(14),
 });
 
 export type Env = z.infer<typeof schema>;

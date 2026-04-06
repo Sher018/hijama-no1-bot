@@ -1,4 +1,5 @@
-# https://docs.amvera.ru/applications/environments/nodejs-server.html
+# hijama-no1-bot: только приложение (Node.js). БД — отдельно в Supabase (SUPABASE_* в переменных).
+# Док: https://docs.amvera.ru/applications/environments/nodejs-server.html
 meta:
   environment: node
   toolchain:

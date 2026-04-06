@@ -1,11 +1,12 @@
 -- =============================================================================
--- hijama-no1-bot: полная схема для Supabase (SQL Editor)
--- Выполняйте по порядку сверху вниз на НОВОЙ базе.
--- Если база уже есть — используйте только недостающие фрагменты из
--- supabase/migrations/ (файлы по дате в имени).
+-- hijama-no1-bot: ПОЛНАЯ схема — только для ПУСТОЙ / НОВОЙ базы Supabase
 --
--- Очистка старых слотов/записей в конце периода выполняется ботом (Node.js),
--- не этим скриптом.
+-- ВНИМАНИЕ: если таблица public.slots УЖЕ существует, НЕ запускайте этот файл
+-- (будет ERROR: relation "slots" already exists).
+-- Вместо этого выполните: supabase/manual/apply_incremental_only.sql
+--
+-- Команды SQL только на английском (CREATE TABLE, …). Комментарии — на русском.
+-- Очистка старых слотов в конце месяца — в коде бота (Node.js), не здесь.
 -- =============================================================================
 
 -- --- 20260404120000_initial.sql ---
@@ -24,7 +25,10 @@ create table public.slots (
   constraint slots_ends_after_start check (ends_at > starts_at)
 );
 
-create index slots_starts_at_idx on public.slots (starts_at);
+create unique index slots_starts_at_idx on public.slots (starts_at);
+
+comment on table public.slots is
+  'Слоты приёма; календарь и часы в приложении — Иркутск. Пять стандартных окон в день создаёт бот (AUTO_SLOTS_*).';
 
 create table public.clients (
   id uuid primary key default gen_random_uuid(),

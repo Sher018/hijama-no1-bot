@@ -2,7 +2,11 @@
 -- а clients / appointments / payment_events / settings ещё нет.
 -- Полный вариант для новых проектов: supabase/migrations/20260404120000_initial.sql целиком.
 
-create index if not exists slots_starts_at_idx on public.slots (starts_at);
+drop index if exists public.slots_starts_at_idx;
+create unique index slots_starts_at_idx on public.slots (starts_at);
+
+comment on table public.slots is
+  'Слоты приёма; календарь и часы в приложении — Иркутск. Пять стандартных окон в день создаёт бот (AUTO_SLOTS_*).';
 
 create table if not exists public.clients (
   id uuid primary key default gen_random_uuid(),

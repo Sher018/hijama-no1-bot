@@ -9,6 +9,15 @@ Telegram-бот для автоматизации записи и предопл
 
 Разработка по **Spec-First**: сначала спецификация, затем код.
 
+## Архитектура: бот на Amvera, база в Supabase
+
+| Слой | Где живёт | Что делать |
+|------|-----------|------------|
+| **Приложение** (Node.js, этот репозиторий) | **[Amvera](https://amvera.ru)** | Подключить Git, в корне есть [`amvera.yml`](./amvera.yml): `npm run build` → `npm run start`, порт **3000**. |
+| **База данных** (PostgreSQL) | **[Supabase](https://supabase.com)** | Миграции из `supabase/migrations/` по порядку. **Пустая база:** [`schema_full_apply_in_order.sql`](./supabase/manual/schema_full_apply_in_order.sql). **Уже есть `slots`:** только [`apply_incremental_only.sql`](./supabase/manual/apply_incremental_only.sql) (иначе ошибка *relation "slots" already exists*). |
+
+Бот на Amvera подключается к Supabase только по переменным **`SUPABASE_URL`** и **`SUPABASE_SERVICE_ROLE_KEY`** (задаются в панели Amvera, не в Git). Код и миграции БД в одном репозитории удобно хранить вместе, но **деплой кода** (push → Amvera) и **применение миграций** (SQL в Supabase) — разные шаги.
+
 ## Требования
 
 - Node.js **20+**
@@ -19,7 +28,7 @@ Telegram-бот для автоматизации записи и предопл
 
 1. Скопируйте `.env.example` в `.env` и заполните переменные (секреты не коммитить).
 
-2. В Supabase (SQL Editor): выполните миграции **по порядку** из `supabase/migrations/`:
+2. В **Supabase** (SQL Editor): выполните миграции **по порядку** из `supabase/migrations/`:
    - `20260404120000_initial.sql` — **целиком** (не только `slots`).
    - `20260405140000_add_yookassa_confirmation_url.sql` (ссылка на оплату для повтора в `/start`)
 
@@ -83,8 +92,8 @@ git push -u origin main
 ### 2. Проект на Amvera
 
 1. В [консоли Amvera](https://console.amvera.ru) создайте приложение типа **Node.JS Server** из **Git**-репозитория, укажите URL репозитория и ветку `main`.
-2. В корне уже лежит [`amvera.yml`](./amvera.yml): сборка `npm run build`, запуск `dist/index.js`, порт контейнера **3000**.
-3. В разделе **переменных окружения** Amvera добавьте **все** ключи из вашего локального `.env` (как в [`.env.example`](./.env.example)), значения — боевые/тестовые под прод.
+2. В корне уже лежит [`amvera.yml`](./amvera.yml): сборка `npm run build`, запуск **`npm run start`**, порт контейнера **3000**.
+3. В разделе **переменных окружения** Amvera добавьте **все** ключи (как в [`.env.example`](./.env.example)), в том числе **`SUPABASE_URL`** и **`SUPABASE_SERVICE_ROLE_KEY`** из проекта Supabase — без них бот не достучится до БД.
 
    **Обязательно для продакшена на Amvera:**
 

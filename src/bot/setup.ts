@@ -38,6 +38,7 @@ import {
   irkutskDayUtcRange,
   isoYmdToDdMmYyyy,
   ddMmYyyyToIsoYmd,
+  parseIrkutskStartEnd,
 } from "../util/time.js";
 import { escapeHtml } from "../util/escapeHtml.js";
 import { isWithinWorkingHours } from "../util/workingHours.js";
@@ -57,7 +58,7 @@ import {
 } from "./content/servicesCatalog.js";
 
 interface SessionData {
-  step?: "name" | "phone" | "admin_closure" | "admin_price";
+  step?: "name" | "phone" | "admin_closure" | "admin_price" | "admin_addslot";
   slotId?: string;
   tempName?: string;
   adminPriceServiceId?: string;
@@ -183,21 +184,6 @@ async function replyPendingPayment(
       "Ссылка на оплату недоступна (обновите проект и миграции БД или начните запись снова после истечения резерва ~30 мин).",
     ].join("\n")
   );
-}
-
-/** dateStr — YYYY-MM-DD (календарь Иркутска). */
-function parseIrkutskStartEnd(
-  dateStr: string,
-  timeStr: string,
-  durationMin: number
-): { starts_at: string; ends_at: string } {
-  const iso = `${dateStr}T${timeStr.length === 5 ? `${timeStr}:00` : timeStr}+08:00`;
-  const starts = new Date(iso);
-  if (Number.isNaN(starts.getTime())) {
-    throw new Error("bad datetime");
-  }
-  const ends = new Date(starts.getTime() + durationMin * 60_000);
-  return { starts_at: starts.toISOString(), ends_at: ends.toISOString() };
 }
 
 export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContext> {
@@ -400,7 +386,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         "• мастер ещё не добавил расписание в боте;\n" +
         "• выбран выходной день (мастер отметил день в «Админка → Выходные»);\n" +
         "• все окна уже заняты.\n\n" +
-        `Мастеру: слоты только в графике ${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END} (Иркутск). /admin или:\n` +
+        `Мастеру: слоты только в графике ${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END} (Иркутск). Админка → «Слоты и записи» → «Добавить слот», или:\n` +
         "/добавить_слот 15-04-2026 14:00 60\n\n" +
         "Клиентам: напишите нам в этот чат или зайдите позже.";
       const msg = ctx.callbackQuery?.message;
@@ -532,6 +518,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
           Markup.button.callback("Список слотов", "admin:cmd:slots"),
           Markup.button.callback("Записи 14 дн.", "admin:cmd:bookings"),
         ],
+        [Markup.button.callback("Добавить слот", "admin:addslot")],
         [Markup.button.callback("« Назад", "admin:home")],
       ])
     );
@@ -542,7 +529,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       [
         "Команды (есть русские и английские варианты):",
         "/слоты или /slots — список слотов",
-        "/добавить_слот или /addslot ДД-ММ-ГГГГ ЧЧ:ММ длительность_мин",
+        "/добавить_слот или /addslot ДД-ММ-ГГГ ЧЧ:ММ длительность_мин (или кнопка «Добавить слот» в этом разделе)",
         "/записи или /bookings — записи за 14 дней",
         "/отменить или /cancel <uuid записи> — отменить запись",
         "/перенести или /move <uuid записи> <uuid нового слота>",
@@ -552,6 +539,57 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         "UUID копируйте из списка записей (/записи) или при необходимости из БД.",
       ].join("\n")
     );
+  }
+
+  async function createSlotFromAdminLine(ctx: BotContext, raw: string): Promise<void> {
+    const m = raw.match(
+      /^(\d{2})-(\d{2})-(\d{4})\s+(\d{1,2}:\d{2})\s+(\d+)\s*$/i
+    );
+    if (!m) {
+      await ctx.reply(
+        "Формат: ДД-ММ-ГГГ ЧЧ:ММ длительность_мин\nПример: 15-04-2026 14:00 60\n\nОтмена: /admin"
+      );
+      return;
+    }
+    try {
+      const ymd = `${m[3]}-${m[2]}-${m[1]}`;
+      const { starts_at, ends_at } = parseIrkutskStartEnd(
+        ymd,
+        m[4],
+        Number(m[5])
+      );
+      if (
+        !isWithinWorkingHours(
+          starts_at,
+          env.WORKING_HOURS_START,
+          env.WORKING_HOURS_END
+        )
+      ) {
+        await ctx.reply(
+          `Начало сеанса вне графика клиники (${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END}, время Иркутска). Выберите другое время.`
+        );
+        return;
+      }
+      const { fromInclusive, toExclusive } = irkutskDayUtcRange(ymd);
+      const already = await countSlotsStartingInRange(
+        supabase,
+        fromInclusive,
+        toExclusive
+      );
+      if (already >= env.MAX_SLOTS_PER_DAY) {
+        await ctx.reply(
+          `На этот день уже ${env.MAX_SLOTS_PER_DAY} слотов (лимит по графику). Удалите слот (/удалить_слот) или выберите другую дату.`
+        );
+        return;
+      }
+      const row = await insertSlot(supabase, { starts_at, ends_at });
+      if (ctx.session?.step === "admin_addslot") {
+        ctx.session = {};
+      }
+      await ctx.reply(`Слот создан:\n${formatSlotRu(row.starts_at)}`);
+    } catch {
+      await ctx.reply("Не удалось разобрать дату/время. Проверьте формат.");
+    }
   }
 
   bot.on("text", async (ctx, next) => {
@@ -568,7 +606,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       };
       const run = adminPinned[trimmed];
       if (run) {
-        if (step === "name" || step === "phone") {
+        if (step === "name" || step === "phone" || step === "admin_addslot") {
           ctx.session = {};
         }
         await run();
@@ -624,6 +662,18 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         console.error(e);
         await ctx.reply("Ошибка сохранения цены.");
       }
+      return;
+    }
+
+    if (
+      ctx.session?.step === "admin_addslot" &&
+      isAdmin(ctx as BotContext, env)
+    ) {
+      const text = ctx.message.text.trim();
+      if (text.startsWith("/")) {
+        return next();
+      }
+      await createSlotFromAdminLine(ctx, text);
       return;
     }
 
@@ -738,6 +788,18 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
+    }
+    if (ctx.session) {
+      if (ctx.session.step === "admin_price") {
+        delete ctx.session.adminPriceServiceId;
+      }
+      if (
+        ctx.session.step === "admin_addslot" ||
+        ctx.session.step === "admin_closure" ||
+        ctx.session.step === "admin_price"
+      ) {
+        delete ctx.session.step;
+      }
     }
     await ctx.reply(
       "Панель администратора. Кнопки внизу закреплены — быстрый доступ к разделам.",
@@ -889,6 +951,19 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     await showAdminHelpText(ctx);
   });
 
+  bot.action("admin:addslot", async (ctx) => {
+    if (!isAdmin(ctx, env)) {
+      await ctx.answerCbQuery("Нет доступа");
+      return;
+    }
+    await ctx.answerCbQuery();
+    ctx.session ??= {};
+    ctx.session.step = "admin_addslot";
+    await ctx.reply(
+      "Отправьте одной строкой: ДД-ММ-ГГГ ЧЧ:ММ длительность_мин\nПример: 15-04-2026 14:00 60\n\nОтмена: /admin"
+    );
+  });
+
   bot.command(["slots", "слоты"], async (ctx) => {
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
@@ -927,51 +1002,15 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     const raw = ctx.message.text.replace(/^\/\S+\s*/, "").trim();
-    const m = raw.match(
-      /^(\d{2})-(\d{2})-(\d{4})\s+(\d{1,2}:\d{2})\s+(\d+)\s*$/i
-    );
-    if (!m) {
+    if (!raw) {
+      ctx.session ??= {};
+      ctx.session.step = "admin_addslot";
       await ctx.reply(
-        "Формат: /добавить_слот ДД-ММ-ГГГГ ЧЧ:ММ длительность_мин\n(англ.: /addslot …)\nПример: /добавить_слот 10-04-2026 14:00 60"
+        "Отправьте одной строкой: ДД-ММ-ГГГ ЧЧ:ММ длительность_мин\nПример: 15-04-2026 14:00 60\n\nОтмена: /admin"
       );
       return;
     }
-    try {
-      const ymd = `${m[3]}-${m[2]}-${m[1]}`;
-      const { starts_at, ends_at } = parseIrkutskStartEnd(
-        ymd,
-        m[4],
-        Number(m[5])
-      );
-      if (
-        !isWithinWorkingHours(
-          starts_at,
-          env.WORKING_HOURS_START,
-          env.WORKING_HOURS_END
-        )
-      ) {
-        await ctx.reply(
-          `Начало сеанса вне графика клиники (${env.WORKING_HOURS_START}–${env.WORKING_HOURS_END}, время Иркутска). Выберите другое время.`
-        );
-        return;
-      }
-      const { fromInclusive, toExclusive } = irkutskDayUtcRange(ymd);
-      const already = await countSlotsStartingInRange(
-        supabase,
-        fromInclusive,
-        toExclusive
-      );
-      if (already >= env.MAX_SLOTS_PER_DAY) {
-        await ctx.reply(
-          `На этот день уже ${env.MAX_SLOTS_PER_DAY} слотов (лимит по графику). Удалите слот (/удалить_слот) или выберите другую дату.`
-        );
-        return;
-      }
-      const row = await insertSlot(supabase, { starts_at, ends_at });
-      await ctx.reply(`Слот создан:\n${formatSlotRu(row.starts_at)}`);
-    } catch {
-      await ctx.reply("Не удалось разобрать дату/время. Проверьте формат.");
-    }
+    await createSlotFromAdminLine(ctx, raw);
   });
 
   bot.command(["bookings", "записи"], async (ctx) => {

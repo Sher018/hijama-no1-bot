@@ -1,21 +1,23 @@
--- Примеры слотов: начало в 14:00 и 10:00 по Иркутску (в графике 09:00–21:00).
--- Раньше использовался now()+N days без времени — получались ночные слоты.
+-- =============================================================================
+-- Ручной тестовый сид (не обязателен): в проде слоты создаёт бот — каждые ~2 мин
+-- планировщик дополняет горизонт (см. AUTO_SLOTS_* в .env.example, 5 окон в день).
+-- =============================================================================
+-- Примеры двух слотов вручную (Asia/Irkutsk). Повторный запуск добавит строки.
 
-insert into public.slots (starts_at, ends_at, is_published, is_booked)
-values
-  (
-    ((now() at time zone 'Asia/Irkutsk')::date + interval '2 days' + interval '14 hours')
-      at time zone 'Asia/Irkutsk',
-    ((now() at time zone 'Asia/Irkutsk')::date + interval '2 days' + interval '15 hours')
-      at time zone 'Asia/Irkutsk',
-    true,
-    false
-  ),
-  (
-    ((now() at time zone 'Asia/Irkutsk')::date + interval '3 days' + interval '10 hours')
-      at time zone 'Asia/Irkutsk',
-    ((now() at time zone 'Asia/Irkutsk')::date + interval '3 days' + interval '11 hours')
-      at time zone 'Asia/Irkutsk',
-    true,
-    false
-  );
+WITH params AS (
+  SELECT (now() AT TIME ZONE 'Asia/Irkutsk')::date AS irk_today
+)
+INSERT INTO public.slots (starts_at, ends_at, is_published, is_booked)
+SELECT
+  ((irk_today + 2) + interval '14 hours') AT TIME ZONE 'Asia/Irkutsk',
+  ((irk_today + 2) + interval '15 hours') AT TIME ZONE 'Asia/Irkutsk',
+  true,
+  false
+FROM params
+UNION ALL
+SELECT
+  ((irk_today + 3) + interval '10 hours') AT TIME ZONE 'Asia/Irkutsk',
+  ((irk_today + 3) + interval '11 hours') AT TIME ZONE 'Asia/Irkutsk',
+  true,
+  false
+FROM params;

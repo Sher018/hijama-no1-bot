@@ -90,3 +90,33 @@ export function irkutskDayUtcRange(dayYyyyMmDd: string): {
     toExclusive: toExclusive.toISOString(),
   };
 }
+
+/** Сегодняшняя дата календаря Иркутска (YYYY-MM-DD). */
+export function irkutskTodayYmd(now = new Date()): string {
+  return formatIrkutskDateOnly(now.toISOString());
+}
+
+/** YYYY-MM-DD + N календарных дней (Asia/Irkutsk, без DST). */
+export function addIrkutskCalendarDaysYmd(
+  ymd: string,
+  deltaDays: number
+): string {
+  const t =
+    new Date(`${ymd}T12:00:00+08:00`).getTime() + deltaDays * 86400000;
+  return formatIrkutskDateOnly(new Date(t).toISOString());
+}
+
+/** dateStr — YYYY-MM-DD (календарь Иркутска). timeStr — «ЧЧ:ММ» или «Ч:ММ». */
+export function parseIrkutskStartEnd(
+  dateStr: string,
+  timeStr: string,
+  durationMin: number
+): { starts_at: string; ends_at: string } {
+  const iso = `${dateStr}T${timeStr.length === 5 ? `${timeStr}:00` : timeStr}+08:00`;
+  const starts = new Date(iso);
+  if (Number.isNaN(starts.getTime())) {
+    throw new Error("bad datetime");
+  }
+  const ends = new Date(starts.getTime() + durationMin * 60_000);
+  return { starts_at: starts.toISOString(), ends_at: ends.toISOString() };
+}

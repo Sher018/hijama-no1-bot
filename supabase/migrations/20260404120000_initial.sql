@@ -13,7 +13,10 @@ create table public.slots (
   constraint slots_ends_after_start check (ends_at > starts_at)
 );
 
-create index slots_starts_at_idx on public.slots (starts_at);
+create unique index slots_starts_at_idx on public.slots (starts_at);
+
+comment on table public.slots is
+  'Слоты приёма; календарь и часы в приложении — Иркутск. Пять стандартных окон в день создаёт бот (AUTO_SLOTS_*).';
 
 create table public.clients (
   id uuid primary key default gen_random_uuid(),
