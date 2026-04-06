@@ -9,7 +9,7 @@ import {
   insertPaymentEvent,
   tryConfirmAppointment,
 } from "./appointmentsRepo.js";
-import { formatSlotRu } from "../util/time.js";
+import { notifyAfterSuccessfulPayment } from "./paymentConfirmation.js";
 
 function checkBasicAuth(req: Request, env: Env): boolean {
   const h = req.headers.authorization;
@@ -24,14 +24,25 @@ function checkBasicAuth(req: Request, env: Env): boolean {
   );
 }
 
+interface YooPaymentObject {
+  id?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
 interface YooNotification {
   type?: string;
   event?: string;
-  object?: {
-    id?: string;
-    status?: string;
-    metadata?: Record<string, string>;
-  };
+  object?: YooPaymentObject;
+}
+
+function metadataAppointmentId(meta: unknown): string | undefined {
+  if (!meta || typeof meta !== "object") return undefined;
+  const m = meta as Record<string, unknown>;
+  const v = m.appointment_id;
+  if (typeof v === "string") return v;
+  if (v != null) return String(v);
+  return undefined;
 }
 
 export function createYookassaWebhookHandler(
@@ -69,7 +80,7 @@ export function createYookassaWebhookHandler(
         return;
       }
 
-      let appointmentId = payment?.metadata?.appointment_id;
+      let appointmentId = metadataAppointmentId(payment?.metadata);
       let apt = appointmentId
         ? await getAppointmentById(supabase, appointmentId)
         : null;
@@ -80,6 +91,10 @@ export function createYookassaWebhookHandler(
       }
 
       if (!apt || !appointmentId) {
+        console.warn(
+          `yookassa webhook: нет записи для платежа ${paymentId}, metadata=`,
+          payment?.metadata
+        );
         await insertPaymentEvent(supabase, yookassaEventId, null, body);
         res.status(200).end();
         return;
@@ -91,46 +106,7 @@ export function createYookassaWebhookHandler(
       );
 
       if (changed && after && after.status === "confirmed") {
-        const when = formatSlotRu(after.slots.starts_at);
-        const clientTg = after.clients.telegram_user_id;
-        const name = after.clients.full_name ?? "Клиент";
-        const phone = after.clients.phone ?? "—";
-
-        try {
-          await bot.telegram.sendMessage(
-            clientTg,
-            [
-              "Оплата прошла успешно. Запись подтверждена.",
-              "",
-              `Дата и время: ${when}`,
-              `Предоплата: ${after.prepayment_rub} ₽`,
-              `Стоимость сеанса на месте: ${after.session_price_min_rub}–${after.session_price_max_rub} ₽`,
-              "",
-              "До встречи в клинике «Хиджама №1».",
-            ].join("\n")
-          );
-        } catch (e) {
-          console.error("notify client after payment", e);
-        }
-
-        try {
-          await bot.telegram.sendMessage(
-            env.ADMIN_TELEGRAM_ID,
-            [
-              "Новая запись (оплачена).",
-              "",
-              `Время: ${when}`,
-              `Клиент: ${name}`,
-              `Телефон: ${phone}`,
-              `Telegram ID: ${clientTg}`,
-              `@${after.clients.telegram_username ?? "—"}`,
-              `Предоплата: ${after.prepayment_rub} ₽`,
-              `Запись ID: ${after.id}`,
-            ].join("\n")
-          );
-        } catch (e) {
-          console.error("notify admin after payment", e);
-        }
+        await notifyAfterSuccessfulPayment(env, bot, after);
       }
 
       await insertPaymentEvent(supabase, yookassaEventId, appointmentId, body);

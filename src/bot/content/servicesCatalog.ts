@@ -132,3 +132,9 @@ export const SERVICES: ServiceItem[] = [
 export function getServiceById(id: string): ServiceItem | undefined {
   return SERVICES.find((s) => s.id === id);
 }
+
+/** Текст на inline-кнопке Telegram — максимум 64 символа. */
+export function telegramInlineButtonText(text: string): string {
+  if (text.length <= 64) return text;
+  return text.slice(0, 61) + "…";
+}

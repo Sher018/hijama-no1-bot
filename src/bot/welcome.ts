@@ -33,11 +33,12 @@ export function mainMenuKeyboard() {
   ]);
 }
 
+/** message_id приветствия — чтобы не удалять его при навигации. */
 export async function sendMainWelcome(
   ctx: Context,
   supabase: SupabaseClient,
   publicBaseUrl?: string
-): Promise<void> {
+): Promise<number | undefined> {
   const caption = await getWelcomeText(supabase, DEFAULT_WELCOME_CAPTION);
   const img = assetPath(WELCOME_IMAGE_FILE);
   const extra = {
@@ -46,15 +47,26 @@ export async function sendMainWelcome(
   const remoteUrl = publicAssetUrl(publicBaseUrl, WELCOME_IMAGE_FILE);
 
   if (fileExists(img)) {
-    await ctx.replyWithPhoto({ source: img }, { caption, ...extra });
-  } else if (remoteUrl) {
-    try {
-      await ctx.replyWithPhoto({ url: remoteUrl }, { caption, ...extra });
-    } catch (e) {
-      console.warn("Приветствие: нет файла локально и не удалось загрузить по URL", remoteUrl, e);
-      await ctx.reply(caption, extra);
-    }
-  } else {
-    await ctx.reply(caption, extra);
+    const m = await ctx.replyWithPhoto({ source: img }, { caption, ...extra });
+    return m.message_id;
   }
+  if (remoteUrl) {
+    try {
+      const m = await ctx.replyWithPhoto(
+        { url: remoteUrl },
+        { caption, ...extra }
+      );
+      return m.message_id;
+    } catch (e) {
+      console.warn(
+        "Приветствие: нет файла локально и не удалось загрузить по URL",
+        remoteUrl,
+        e
+      );
+      const m = await ctx.reply(caption, extra);
+      return m.message_id;
+    }
+  }
+  const m = await ctx.reply(caption, extra);
+  return m.message_id;
 }

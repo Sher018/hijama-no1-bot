@@ -17,7 +17,7 @@ export async function listAvailableSlots(
     .eq("is_booked", false)
     .gte("starts_at", now)
     .order("starts_at", { ascending: true })
-    .limit(limit * 3);
+    .limit(limit * 5);
 
   if (qErr) throw qErr;
   const list = (slots ?? []) as SlotRow[];

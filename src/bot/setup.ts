@@ -30,6 +30,7 @@ import {
   setServicePrice,
 } from "../services/settingsRepo.js";
 import { createYookassaPayment } from "../services/yookassaClient.js";
+import { syncPendingPaymentFromYookassaApi } from "../services/paymentConfirmation.js";
 import { formatShortRu, formatSlotRu } from "../util/time.js";
 import { escapeHtml } from "../util/escapeHtml.js";
 import { isWithinWorkingHours } from "../util/workingHours.js";
@@ -45,6 +46,7 @@ import {
   fileExists,
   getServiceById,
   publicAssetUrl,
+  telegramInlineButtonText,
 } from "./content/servicesCatalog.js";
 
 interface SessionData {
@@ -52,6 +54,8 @@ interface SessionData {
   slotId?: string;
   tempName?: string;
   adminPriceServiceId?: string;
+  /** message_id приветствия — не удалять при навигации по кнопкам */
+  welcomeMessageId?: number;
 }
 
 type BotContext = Context & { session?: SessionData };
@@ -97,8 +101,20 @@ function formatAdminBookingMessage(a: AppointmentWithRelations): string {
     `Имя: ${name}`,
     `Телефон: ${phone}`,
     `Статус: ${adminBookingPaymentLine(a.status)}`,
-    `запись: ${a.id}`,
   ].join("\n");
+}
+
+async function deleteMessageIfNotWelcome(
+  ctx: BotContext,
+  messageId: number | undefined
+): Promise<void> {
+  if (!ctx.chat?.id || messageId === undefined) return;
+  if (messageId === ctx.session?.welcomeMessageId) return;
+  try {
+    await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+  } catch {
+    /* ignore */
+  }
 }
 
 async function answerAndEditOrReplyText(
@@ -109,6 +125,7 @@ async function answerAndEditOrReplyText(
   const msg = ctx.callbackQuery?.message;
   await ctx.answerCbQuery();
   if (msg && "photo" in msg) {
+    await deleteMessageIfNotWelcome(ctx, msg.message_id);
     await ctx.reply(text, extra as Parameters<BotContext["reply"]>[1]);
   } else if (ctx.callbackQuery && msg && "text" in msg) {
     await ctx.editMessageText(text, extra);
@@ -117,15 +134,34 @@ async function answerAndEditOrReplyText(
 
 async function replyPendingPayment(
   ctx: BotContext,
-  active: AppointmentWithRelations
+  active: AppointmentWithRelations,
+  env: Env,
+  supabase: SupabaseClient,
+  bot: Telegraf<BotContext>
 ): Promise<void> {
+  await syncPendingPaymentFromYookassaApi(env, supabase, bot, active.id);
+  const fresh = await getAppointmentById(supabase, active.id);
+  const cur = fresh ?? active;
+  if (cur.status === "confirmed") {
+    await ctx.reply(
+      [
+        "Оплата получена, запись подтверждена.",
+        "",
+        `Время: ${formatSlotRu(cur.slots.starts_at)}`,
+        `Предоплата: ${cur.prepayment_rub} ₽`,
+        "",
+        "До встречи в клинике «Хиджама №1».",
+      ].join("\n")
+    );
+    return;
+  }
   const lines = [
     "У вас есть запись, ожидающая оплаты.",
-    `Время: ${formatSlotRu(active.slots.starts_at)}`,
+    `Время: ${formatSlotRu(cur.slots.starts_at)}`,
     "",
     "После оплаты вы вернётесь в бот — придёт подтверждение.",
   ];
-  const url = active.yookassa_confirmation_url;
+  const url = cur.yookassa_confirmation_url;
   if (url) {
     await ctx.reply(
       lines.join("\n"),
@@ -176,7 +212,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     if (client) {
       const active = await getActiveAppointmentForClient(supabase, client.id);
       if (active?.status === "pending_payment") {
-        await replyPendingPayment(ctx, active);
+        await replyPendingPayment(ctx, active, env, supabase, bot);
         return;
       }
       if (active?.status === "confirmed") {
@@ -192,7 +228,9 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       }
     }
 
-    await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    ctx.session ??= {};
+    const welcomeId = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    if (welcomeId) ctx.session.welcomeMessageId = welcomeId;
     if (isAdmin(ctx as BotContext, env)) {
       await ctx.reply(
         "Разделы администратора — кнопки внизу закреплены.",
@@ -216,30 +254,56 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   bot.action("menu:main", async (ctx) => {
     if (!ctx.from) return;
     await ctx.answerCbQuery();
-    await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    ctx.session ??= {};
+    const msg = ctx.callbackQuery?.message;
+    const wid = ctx.session.welcomeMessageId;
+    if (msg && wid !== undefined && msg.message_id !== wid) {
+      await deleteMessageIfNotWelcome(ctx, msg.message_id);
+      return;
+    }
+    if (msg && wid === undefined) {
+      await deleteMessageIfNotWelcome(ctx, msg.message_id);
+    }
+    const mid = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    if (mid) ctx.session.welcomeMessageId = mid;
   });
 
   bot.action("menu:services", async (ctx) => {
     if (!ctx.from) return;
     await ctx.answerCbQuery();
+    ctx.session ??= {};
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
     for (let i = 0; i < SERVICES.length; i += 2) {
       const a = SERVICES[i];
       const b = SERVICES[i + 1];
       const line = [
-        Markup.button.callback(a.buttonLabel, `svc:${a.id}`),
+        Markup.button.callback(
+          telegramInlineButtonText(a.title),
+          `svc:${a.id}`
+        ),
       ];
-      if (b) line.push(Markup.button.callback(b.buttonLabel, `svc:${b.id}`));
+      if (b) {
+        line.push(
+          Markup.button.callback(
+            telegramInlineButtonText(b.title),
+            `svc:${b.id}`
+          )
+        );
+      }
       rows.push(line);
     }
     rows.push([Markup.button.callback("« На главную", "menu:main")]);
     const text = "Выберите услугу:";
     const msg = ctx.callbackQuery?.message;
     const kb = Markup.inlineKeyboard(rows);
-    if (msg && "photo" in msg) {
+    const wid = ctx.session.welcomeMessageId;
+    if (msg && wid !== undefined && msg.message_id === wid) {
       await ctx.reply(text, kb);
-    } else if (ctx.callbackQuery && msg && "text" in msg) {
-      await ctx.editMessageText(text, kb);
+    } else if (msg) {
+      await deleteMessageIfNotWelcome(ctx, msg.message_id);
+      await ctx.reply(text, kb);
+    } else {
+      await ctx.reply(text, kb);
     }
   });
 
@@ -251,6 +315,10 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
     await ctx.answerCbQuery();
+    const prev = ctx.callbackQuery?.message;
+    if (prev) {
+      await deleteMessageIfNotWelcome(ctx, prev.message_id);
+    }
     const prices = await getServicePrices(supabase);
     const price = prices[s.id] ?? 10;
     const caption = [
@@ -305,7 +373,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
     const when = formatSlotRu(active.slots.starts_at);
     if (active.status === "pending_payment") {
-      await replyPendingPayment(ctx, active);
+      await replyPendingPayment(ctx, active, env, supabase, bot);
       return;
     }
     await ctx.reply(`Подтверждённая запись: ${when}.`);
@@ -313,7 +381,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
 
   bot.action("book", async (ctx) => {
     if (!ctx.from) return;
-    const slots = await listAvailableSlots(supabase, 15, {
+    const slots = await listAvailableSlots(supabase, 50, {
       start: env.WORKING_HOURS_START,
       end: env.WORKING_HOURS_END,
     });
@@ -418,14 +486,18 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       const b = SERVICES[i + 1];
       const line = [
         Markup.button.callback(
-          `${a.buttonLabel} · ${prices[a.id] ?? 10} ₽`,
+          telegramInlineButtonText(
+            `${a.title} · ${prices[a.id] ?? 10} ₽`
+          ),
           `admin:price:${a.id}`
         ),
       ];
       if (b) {
         line.push(
           Markup.button.callback(
-            `${b.buttonLabel} · ${prices[b.id] ?? 10} ₽`,
+            telegramInlineButtonText(
+              `${b.title} · ${prices[b.id] ?? 10} ₽`
+            ),
             `admin:price:${b.id}`
           )
         );
@@ -477,9 +549,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
 
     const trimmed = ctx.message.text.trim();
     const step = ctx.session?.step;
-    const adminPinnedBlocksBooking =
-      step === "name" || step === "phone";
-    if (isAdmin(ctx as BotContext, env) && !adminPinnedBlocksBooking) {
+    if (isAdmin(ctx as BotContext, env)) {
       const adminPinned: Record<string, () => Promise<void>> = {
         "Выходные дни": () => showAdminClosurePanel(ctx),
         "Цены услуг": () => showAdminPricesPanel(ctx),
@@ -488,6 +558,9 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       };
       const run = adminPinned[trimmed];
       if (run) {
+        if (step === "name" || step === "phone") {
+          ctx.session = {};
+        }
         await run();
         return;
       }
