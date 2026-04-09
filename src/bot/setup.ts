@@ -265,6 +265,16 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       telegram_username: ctx.from.username ?? null,
     });
 
+    ctx.session ??= {};
+    const welcomeId = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    if (welcomeId) ctx.session.welcomeMessageId = welcomeId;
+    if (isAdmin(ctx as BotContext, env)) {
+      await ctx.reply(
+        "Разделы администратора — кнопки внизу закреплены.",
+        adminPinnedReplyKb()
+      );
+    }
+
     const client = await getClientByTelegramId(supabase, ctx.from.id);
     if (client) {
       const active = await getActiveAppointmentForClient(supabase, client.id);
@@ -281,18 +291,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
             "Перенос и отмена — по согласованию с мастером (напишите в этот чат).",
           ].join("\n")
         );
-        return;
       }
-    }
-
-    ctx.session ??= {};
-    const welcomeId = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
-    if (welcomeId) ctx.session.welcomeMessageId = welcomeId;
-    if (isAdmin(ctx as BotContext, env)) {
-      await ctx.reply(
-        "Разделы администратора — кнопки внизу закреплены.",
-        adminPinnedReplyKb()
-      );
     }
   });
 
