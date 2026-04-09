@@ -54,6 +54,7 @@ create table public.appointments (
   notes text,
   reminder_2h_sent_at timestamptz,
   reminder_1h_sent_at timestamptz,
+  reminder_skip_one_hour boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -384,15 +384,19 @@ export async function fetchAppointmentsForReminder(
   kind: "2h" | "1h"
 ): Promise<AppointmentWithRelations[]> {
   const now = Date.now();
-  const from = new Date(now + windowMin * 60_000).toISOString();
-  const to = new Date(now + windowMax * 60_000).toISOString();
   const sentField = kind === "2h" ? "reminder_2h_sent_at" : "reminder_1h_sent_at";
 
-  const { data, error } = await supabase
+  let q = supabase
     .from("appointments")
     .select("*, slots(*), clients(*)")
     .eq("status", "confirmed")
     .is(sentField, null);
+
+  if (kind === "1h") {
+    q = q.eq("reminder_skip_one_hour", false);
+  }
+
+  const { data, error } = await q;
 
   if (error) throw error;
   const rows = (data ?? []) as AppointmentWithRelations[];
@@ -404,4 +408,15 @@ export async function fetchAppointmentsForReminder(
     const maxMs = windowMax * 60_000;
     return t >= minMs && t <= maxMs;
   });
+}
+
+export async function setReminderSkipOneHour(
+  supabase: SupabaseClient,
+  appointmentId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("appointments")
+    .update({ reminder_skip_one_hour: true })
+    .eq("id", appointmentId);
+  if (error) throw error;
 }

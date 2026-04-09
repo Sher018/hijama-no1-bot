@@ -37,6 +37,8 @@ export interface AppointmentRow {
   notes: string | null;
   reminder_2h_sent_at: string | null;
   reminder_1h_sent_at: string | null;
+  /** Клиент подтвердил визит в напоминании за 2 ч — не слать напоминание за 1 ч */
+  reminder_skip_one_hour?: boolean;
   created_at: string;
   updated_at: string;
 }

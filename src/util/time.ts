@@ -30,6 +30,19 @@ export function formatIrkutskTimeHm(iso: string): string {
   }).format(new Date(iso));
 }
 
+/**
+ * День недели (длинный) и дата ДД-ММ-ГГГГ по календарному дню Иркутска (YYYY-MM-DD).
+ */
+export function formatWeekdayDdMmYyyyFromYmd(ymd: string): string {
+  const iso = `${ymd}T12:00:00+08:00`;
+  const d = new Date(iso);
+  const weekday = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: TZ,
+    weekday: "long",
+  }).format(d);
+  return `${weekday}, ${formatDdMmYyyy(iso)}`;
+}
+
 /** Дата в Иркутске: ДД-ММ-ГГГГ */
 export function formatDdMmYyyy(iso: string): string {
   const d = new Date(iso);

@@ -79,3 +79,6 @@ drop trigger if exists appointments_updated_at on public.appointments;
 create trigger appointments_updated_at
   before update on public.appointments
   for each row execute function public.set_updated_at();
+
+alter table public.appointments
+  add column if not exists reminder_skip_one_hour boolean not null default false;

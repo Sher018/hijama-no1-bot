@@ -14,6 +14,7 @@ import {
   setYookassaPaymentInfo,
   getActiveAppointmentForClient,
   getAppointmentById,
+  setReminderSkipOneHour,
   cancelAppointmentByAdmin,
   moveAppointmentToSlot,
   listAppointmentsInSlotRange,
@@ -38,8 +39,8 @@ import {
   formatShortRu,
   formatSlotRu,
   formatIrkutskDateOnly,
-  formatDdMmDot,
   formatIrkutskTimeHm,
+  formatWeekdayDdMmYyyyFromYmd,
   irkutskDayUtcRange,
   isoYmdToDdMmYyyy,
   ddMmYyyyToIsoYmd,
@@ -119,10 +120,10 @@ function formatAdminBookingMessage(a: AppointmentWithRelations): string {
   ].join("\n");
 }
 
-/** До 7 колонок: дата в первой строке, под ней — времена этого дня. */
-const SLOT_BOOK_GRID_MAX_DAYS = 7;
+/** Шаг 1 записи: до 7 дат, по одной кнопке в строке. */
+const SLOT_BOOK_MAX_DAYS = 7;
 
-function buildBookSlotGridRows(slots: SlotRow[]) {
+function buildBookDateRows(slots: SlotRow[]) {
   const byDate = new Map<string, SlotRow[]>();
   for (const s of slots) {
     const d = formatIrkutskDateOnly(s.starts_at);
@@ -130,45 +131,13 @@ function buildBookSlotGridRows(slots: SlotRow[]) {
     arr.push(s);
     byDate.set(d, arr);
   }
-  const dates = [...byDate.keys()].sort();
-  const colCount = Math.min(SLOT_BOOK_GRID_MAX_DAYS, dates.length);
-  const columns: SlotRow[][] = [];
-  for (let i = 0; i < colCount; i++) {
-    const ymd = dates[i];
-    const list = (byDate.get(ymd) ?? []).sort(
-      (a, b) =>
-        new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()
-    );
-    columns.push(list);
-  }
-  const maxRows = Math.max(0, ...columns.map((c) => c.length));
-
-  const rows: ReturnType<typeof Markup.button.callback>[][] = [];
-
-  rows.push(
-    columns.map((col) => {
-      const slot0 = col[0];
-      const label = slot0
-        ? telegramInlineButtonText(formatDdMmDot(slot0.starts_at))
-        : "—";
-      return Markup.button.callback(label, "book:noop");
-    })
-  );
-
-  for (let r = 0; r < maxRows; r++) {
-    rows.push(
-      columns.map((col) => {
-        const slot = col[r];
-        if (slot) {
-          return Markup.button.callback(
-            telegramInlineButtonText(formatIrkutskTimeHm(slot.starts_at)),
-            `slot:${slot.id}`
-          );
-        }
-        return Markup.button.callback("…", "book:noop");
-      })
-    );
-  }
+  const dates = [...byDate.keys()].sort().slice(0, SLOT_BOOK_MAX_DAYS);
+  const rows = dates.map((ymd) => [
+    Markup.button.callback(
+      telegramInlineButtonText(formatWeekdayDdMmYyyyFromYmd(ymd)),
+      `bookday:${ymd}`
+    ),
+  ]);
   rows.push([Markup.button.callback("« Назад", "menu:main")]);
   return rows;
 }
@@ -215,20 +184,20 @@ async function replyPendingPayment(
   if (cur.status === "confirmed") {
     await ctx.reply(
       [
-        "Оплата получена, запись подтверждена.",
+        "✅ Оплата получена, запись подтверждена.",
         "",
-        `Время: ${formatSlotRu(cur.slots.starts_at)}`,
-        `Предоплата: ${cur.prepayment_rub} ₽`,
+        `📅 ${formatSlotRu(cur.slots.starts_at)}`,
+        `💳 Предоплата: ${cur.prepayment_rub} ₽`,
         ...(procLine ? ["", procLine] : []),
         "",
-        "До встречи в клинике «Хиджама №1».",
+        "До встречи в клинике «Хиджама №1»! 🙏",
       ].join("\n")
     );
     return;
   }
   const lines = [
-    "У вас есть запись, ожидающая оплаты.",
-    `Время: ${formatSlotRu(cur.slots.starts_at)}`,
+    "💳 У вас есть запись, ожидающая оплаты.",
+    `📅 ${formatSlotRu(cur.slots.starts_at)}`,
     ...(procLine ? [procLine] : []),
     "",
     "После оплаты вы вернётесь в бот — придёт подтверждение.",
@@ -296,7 +265,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       if (active?.status === "confirmed") {
         await ctx.reply(
           [
-            "У вас уже есть подтверждённая запись:",
+            "📋 У вас уже есть подтверждённая запись:",
             formatSlotRu(active.slots.starts_at),
             "",
             "Перенос и отмена — по согласованию с мастером (напишите в этот чат).",
@@ -485,19 +454,87 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       return;
     }
 
-    const rows = buildBookSlotGridRows(slots);
+    const rows = buildBookDateRows(slots);
     await answerAndEditOrReplyText(
       ctx,
       [
-        "Выберите время сеанса:",
-        "Первая строка — даты (Иркутск), ниже — свободные окна в колонке дня.",
+        "📅 Выберите дату приёма (Иркутск):",
+        "",
+        "После выбора даты появятся свободные окна по времени.",
       ].join("\n"),
       Markup.inlineKeyboard(rows)
     );
   });
 
+  bot.action(/^bookday:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
+    if (!ctx.from) return;
+    const ymd = ctx.match[1];
+    const slots = await listAvailableSlots(supabase, 50, {
+      start: env.WORKING_HOURS_START,
+      end: env.WORKING_HOURS_END,
+    });
+    const daySlots = slots
+      .filter((s) => formatIrkutskDateOnly(s.starts_at) === ymd)
+      .sort(
+        (a, b) =>
+          new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()
+      );
+    if (daySlots.length === 0) {
+      await ctx.answerCbQuery("На этот день слотов уже нет");
+      return;
+    }
+    await ctx.answerCbQuery();
+    const timeButtons = daySlots.map((s) =>
+      Markup.button.callback(
+        telegramInlineButtonText(formatIrkutskTimeHm(s.starts_at)),
+        `slot:${s.id}`
+      )
+    );
+    const timeRows: ReturnType<typeof Markup.button.callback>[][] = [];
+    for (let i = 0; i < timeButtons.length; i += 3) {
+      timeRows.push(timeButtons.slice(i, i + 3));
+    }
+    timeRows.push([Markup.button.callback("« К выбору даты", "book")]);
+    const text = [
+      `📅 ${formatWeekdayDdMmYyyyFromYmd(ymd)}`,
+      "",
+      "🕐 Выберите время сеанса:",
+    ].join("\n");
+    const msg = ctx.callbackQuery?.message;
+    const kb = Markup.inlineKeyboard(timeRows);
+    if (msg && "photo" in msg) {
+      await ctx.reply(text, kb);
+    } else if (msg && "text" in msg) {
+      await ctx.editMessageText(text, kb);
+    }
+  });
+
   bot.action("book:noop", async (ctx) => {
     await ctx.answerCbQuery();
+  });
+
+  bot.action(/^rem:skip1h:([0-9a-f-]{36})$/i, async (ctx) => {
+    if (!ctx.from) return;
+    const apptId = ctx.match[1];
+    const apt = await getAppointmentById(supabase, apptId);
+    if (!apt || apt.status !== "confirmed") {
+      await ctx.answerCbQuery("Запись не найдена");
+      return;
+    }
+    if (ctx.from.id !== apt.clients.telegram_user_id) {
+      await ctx.answerCbQuery("Это не ваша запись");
+      return;
+    }
+    try {
+      await setReminderSkipOneHour(supabase, apptId);
+    } catch (e) {
+      console.error(e);
+      await ctx.answerCbQuery(
+        "Не удалось сохранить. Обновите бота (миграция БД) или напишите администратору."
+      );
+      return;
+    }
+    await ctx.answerCbQuery("Готово! Напоминание за час не отправим. 👍");
   });
 
   bot.action(/^slot:([0-9a-f-]{36})$/i, async (ctx) => {

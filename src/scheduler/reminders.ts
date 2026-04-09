@@ -1,3 +1,4 @@
+import { Markup } from "telegraf";
 import type { Telegraf } from "telegraf";
 import type { Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -57,24 +58,72 @@ export function startSchedulers(
         for (const apt of list) {
           const when = formatSlotRu(apt.slots.starts_at);
           const clientId = apt.clients.telegram_user_id;
+
           try {
-            await bot.telegram.sendMessage(
-              clientId,
-              kind === "2h"
-                ? `Напоминание: через 2 часа ваш сеанс в «Хиджама №1».\n${when}`
-                : `Напоминание: через 1 час ваш сеанс в «Хиджама №1».\n${when}`
-            );
             await markReminderSent(supabase, apt.id, kind);
+          } catch (e) {
+            console.error("markReminderSent", e);
+            continue;
+          }
+
+          try {
+            if (kind === "2h") {
+              await bot.telegram.sendMessage(
+                clientId,
+                [
+                  "⏰ Через 2 часа сеанс в «Хиджама №1».",
+                  "",
+                  `📅 ${when}`,
+                  "",
+                  "Если вы точно придёте — нажмите кнопку ниже: напоминание за час не отправим.",
+                ].join("\n"),
+                Markup.inlineKeyboard([
+                  [
+                    Markup.button.callback(
+                      "✅ Приду, за час не напоминать",
+                      `rem:skip1h:${apt.id}`
+                    ),
+                  ],
+                ])
+              );
+            } else {
+              await bot.telegram.sendMessage(
+                clientId,
+                [
+                  "🔔 Через 1 час сеанс в «Хиджама №1».",
+                  "",
+                  `📅 ${when}`,
+                  "",
+                  "До встречи!",
+                ].join("\n")
+              );
+            }
           } catch (e) {
             console.error(`reminder ${kind} to client`, e);
           }
 
           try {
+            const name = apt.clients.full_name?.trim() || "Клиент";
+            const phone = apt.clients.phone?.trim() || "—";
             await bot.telegram.sendMessage(
               env.ADMIN_TELEGRAM_ID,
               kind === "2h"
-                ? `Через 2 часа сеанс.\n${when}\n${apt.clients.full_name ?? "Клиент"} / ${apt.clients.phone ?? "—"}`
-                : `Через 1 час сеанс.\n${when}\n${apt.clients.full_name ?? "Клиент"} / ${apt.clients.phone ?? "—"}`
+                ? [
+                    "⏰ Через 2 часа сеанс.",
+                    "",
+                    `📅 ${when}`,
+                    "",
+                    `👤 ${name}`,
+                    `📞 ${phone}`,
+                  ].join("\n")
+                : [
+                    "🔔 Через 1 час сеанс.",
+                    "",
+                    `📅 ${when}`,
+                    "",
+                    `👤 ${name}`,
+                    `📞 ${phone}`,
+                  ].join("\n")
             );
           } catch (e) {
             console.error(`reminder ${kind} to admin`, e);

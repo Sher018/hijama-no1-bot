@@ -10,6 +10,7 @@
 --   20260405140000_add_yookassa_confirmation_url.sql
 --   20260406120000_closure_days.sql (idempotent: IF NOT EXISTS)
 --   20260407120000_slots_starts_at_unique.sql
+--   20260408120000_reminder_skip_one_hour.sql
 -- =============================================================================
 
 -- Ссылка на оплату ЮKassa (повтор при /start и /mybooking, пока pending_payment)
@@ -31,3 +32,6 @@ create unique index slots_starts_at_idx on public.slots (starts_at);
 
 comment on table public.slots is
   'Слоты приёма; календарь и часы в приложении — Иркутск. Пять стандартных окон в день создаёт бот (AUTO_SLOTS_*).';
+
+alter table public.appointments
+  add column if not exists reminder_skip_one_hour boolean not null default false;

@@ -26,13 +26,13 @@ export async function notifyAfterSuccessfulPayment(
     await bot.telegram.sendMessage(
       clientTg,
       [
-        "Оплата прошла успешно. Запись подтверждена.",
+        "✅ Оплата прошла успешно. Запись подтверждена.",
         "",
-        `Дата и время: ${when}`,
-        `Предоплата: ${after.prepayment_rub} ₽`,
+        `📅 ${when}`,
+        `💳 Предоплата: ${after.prepayment_rub} ₽`,
         ...(procLine ? [procLine] : []),
         "",
-        "До встречи в клинике «Хиджама №1».",
+        "До встречи в клинике «Хиджама №1»! 🙏",
       ].join("\n")
     );
   } catch (e) {
@@ -43,16 +43,18 @@ export async function notifyAfterSuccessfulPayment(
     await bot.telegram.sendMessage(
       env.ADMIN_TELEGRAM_ID,
       [
-        "Новая запись (оплачена).",
+        "💚 Новая запись (оплачена).",
         "",
-        `Время: ${when}`,
-        `Клиент: ${name}`,
-        `Телефон: ${phone}`,
-        `Telegram ID: ${clientTg}`,
-        `@${after.clients.telegram_username ?? "—"}`,
-        `Предоплата: ${after.prepayment_rub} ₽`,
-        `Запись ID: ${after.id}`,
-      ].join("\n")
+        `📅 ${when}`,
+        `👤 ${name}`,
+        `📞 ${phone}`,
+        after.clients.telegram_username
+          ? `@${after.clients.telegram_username}`
+          : "",
+        `💳 Предоплата: ${after.prepayment_rub} ₽`,
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
   } catch (e) {
     console.error("notify admin after payment", e);
