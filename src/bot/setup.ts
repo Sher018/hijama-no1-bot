@@ -1160,7 +1160,6 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     try {
       await bot.telegram.sendMessage(cid, text, {
         parse_mode: "HTML",
-        disable_web_page_preview: true,
       });
     } catch (e) {
       console.error("admin channel post", e);
