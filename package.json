@@ -1,6 +1,6 @@
 {
   "name": "hijama-no1-bot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Telegram-бот записи и предоплаты — Хиджама №1 (Иркутск)",
   "type": "module",

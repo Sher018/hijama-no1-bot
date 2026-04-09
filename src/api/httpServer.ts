@@ -27,7 +27,12 @@ export function createHttpServer(
   app.use(express.json());
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, version: getAppVersion() });
+    res.json({
+      ok: true,
+      version: getAppVersion(),
+      /** Меняйте при смене логики /start — по нему видно, что на Amvera новая сборка */
+      startFlow: "welcome-first-v2",
+    });
   });
 
   app.post(

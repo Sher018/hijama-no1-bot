@@ -266,7 +266,24 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     });
 
     ctx.session ??= {};
-    const welcomeId = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    let welcomeId: number | undefined;
+    try {
+      welcomeId = await sendMainWelcome(ctx, supabase, env.PUBLIC_BASE_URL);
+    } catch (e) {
+      console.error("/start: sendMainWelcome failed", e);
+      const fb = await ctx.reply(
+        "Клиника «Хиджама №1», Иркутск. Выберите «Услуги» или «Записаться» ниже.",
+        {
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback("Услуги", "menu:services"),
+              Markup.button.callback("Записаться", "book"),
+            ],
+          ]),
+        }
+      );
+      welcomeId = fb.message_id;
+    }
     if (welcomeId) ctx.session.welcomeMessageId = welcomeId;
     if (isAdmin(ctx as BotContext, env)) {
       await ctx.reply(
