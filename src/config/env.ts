@@ -78,8 +78,8 @@ const schema = z.object({
     .optional()
     .transform((v) => v !== "false" && v !== "0"),
 
-  /** На сколько дней вперёд поддерживать автослоты (включая сегодня) */
-  AUTO_SLOTS_HORIZON_DAYS: z.coerce.number().int().positive().max(90).default(14),
+  /** Сколько календарных дней вперёд создавать слоты в БД (включая сегодня). Совпадает с выбором дат в боте (7 дней). */
+  AUTO_SLOTS_HORIZON_DAYS: z.coerce.number().int().positive().max(90).default(7),
 });
 
 export type Env = z.infer<typeof schema>;

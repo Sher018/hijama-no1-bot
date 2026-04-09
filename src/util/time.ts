@@ -140,6 +140,19 @@ export function addIrkutskCalendarDaysYmd(
   return formatIrkutskDateOnly(new Date(t).toISOString());
 }
 
+/** Подряд `dayCount` календарных дней, начиная с сегодня (Иркутск), YYYY-MM-DD. */
+export function nextIrkutskDayRangeYmd(
+  dayCount: number,
+  now = new Date()
+): string[] {
+  const start = irkutskTodayYmd(now);
+  const out: string[] = [];
+  for (let i = 0; i < dayCount; i++) {
+    out.push(addIrkutskCalendarDaysYmd(start, i));
+  }
+  return out;
+}
+
 /** dateStr — YYYY-MM-DD (календарь Иркутска). timeStr — «ЧЧ:ММ» или «Ч:ММ». */
 export function parseIrkutskStartEnd(
   dateStr: string,

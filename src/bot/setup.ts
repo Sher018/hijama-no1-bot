@@ -41,6 +41,7 @@ import {
   formatIrkutskDateOnly,
   formatIrkutskTimeHm,
   formatWeekdayDdMmYyyyFromYmd,
+  nextIrkutskDayRangeYmd,
   irkutskDayUtcRange,
   isoYmdToDdMmYyyy,
   ddMmYyyyToIsoYmd,
@@ -120,8 +121,8 @@ function formatAdminBookingMessage(a: AppointmentWithRelations): string {
   ].join("\n");
 }
 
-/** Шаг 1 записи: до 7 дат, по одной кнопке в строке. */
-const SLOT_BOOK_MAX_DAYS = 7;
+/** Шаг 1 записи: всегда 7 календарных дней (Иркутск), по одной кнопке в строке. */
+const SLOT_BOOK_CALENDAR_DAYS = 7;
 
 function buildBookDateRows(slots: SlotRow[]) {
   const byDate = new Map<string, SlotRow[]>();
@@ -131,13 +132,19 @@ function buildBookDateRows(slots: SlotRow[]) {
     arr.push(s);
     byDate.set(d, arr);
   }
-  const dates = [...byDate.keys()].sort().slice(0, SLOT_BOOK_MAX_DAYS);
-  const rows = dates.map((ymd) => [
-    Markup.button.callback(
-      telegramInlineButtonText(formatWeekdayDdMmYyyyFromYmd(ymd)),
-      `bookday:${ymd}`
-    ),
-  ]);
+  const week = nextIrkutskDayRangeYmd(SLOT_BOOK_CALENDAR_DAYS);
+  const rows = week.map((ymd) => {
+    const list = byDate.get(ymd) ?? [];
+    const has = list.length > 0;
+    const base = formatWeekdayDdMmYyyyFromYmd(ymd);
+    const label = has ? base : `${base} · нет мест`;
+    return [
+      Markup.button.callback(
+        telegramInlineButtonText(label),
+        has ? `bookday:${ymd}` : `bookunavail:${ymd}`
+      ),
+    ];
+  });
   rows.push([Markup.button.callback("« Назад", "menu:main")]);
   return rows;
 }
@@ -460,10 +467,17 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       [
         "📅 Выберите дату приёма (Иркутск):",
         "",
-        "После выбора даты появятся свободные окна по времени.",
+        "Показаны 7 ближайших дней. Если на день нет мест — так и отмечено. После выбора даты откроются свободные окна.",
       ].join("\n"),
       Markup.inlineKeyboard(rows)
     );
+  });
+
+  bot.action(/^bookunavail:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
+    await ctx.answerCbQuery({
+      text: "На эту дату нет свободных окон. Выберите другой день.",
+      show_alert: false,
+    });
   });
 
   bot.action(/^bookday:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
