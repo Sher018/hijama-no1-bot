@@ -1,5 +1,5 @@
 import type { Telegraf } from "telegraf";
-import type { Env } from "../config/env.js";
+import { adminTelegramIds, type Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppointmentWithRelations } from "../db/types.js";
 import {
@@ -39,25 +39,25 @@ export async function notifyAfterSuccessfulPayment(
     console.error("notify client after payment", e);
   }
 
-  try {
-    await bot.telegram.sendMessage(
-      env.ADMIN_TELEGRAM_ID,
-      [
-        "💚 Новая запись (оплачена).",
-        "",
-        `📅 ${when}`,
-        `👤 ${name}`,
-        `📞 ${phone}`,
-        after.clients.telegram_username
-          ? `@${after.clients.telegram_username}`
-          : "",
-        `💳 Предоплата: ${after.prepayment_rub} ₽`,
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
-  } catch (e) {
-    console.error("notify admin after payment", e);
+  const adminText = [
+    "💚 Новая запись (оплачена).",
+    "",
+    `📅 ${when}`,
+    `👤 ${name}`,
+    `📞 ${phone}`,
+    after.clients.telegram_username
+      ? `@${after.clients.telegram_username}`
+      : "",
+    `💳 Предоплата: ${after.prepayment_rub} ₽`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  for (const adminId of adminTelegramIds(env)) {
+    try {
+      await bot.telegram.sendMessage(adminId, adminText);
+    } catch (e) {
+      console.error("notify admin after payment", e);
+    }
   }
 }
 

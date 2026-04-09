@@ -20,8 +20,21 @@ export const AUTO_SLOT_TIMES_HHMM = [
 
 const AUTO_SLOT_DURATION_MIN = 60;
 
+/** Секунды с эпохи — одинаково для ISO из JS и из PostgreSQL. */
+function slotTimeKey(iso: string): number {
+  return Math.floor(Date.parse(iso) / 1000);
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const err = e as { code?: string; message?: string };
+  if (err.code === "23505") return true;
+  const m = String(err.message ?? "");
+  return m.includes("duplicate key") || m.includes("unique constraint");
+}
+
 /**
- * Для каждого дня в горизонте создаёт недостающие слоты (идемпотентно по starts_at).
+ * Для каждого дня в горизонте создаёт недостающие слоты (идемпотентно по времени начала).
  * Пропускает дни из closure_days и слоты в прошлом.
  */
 export async function ensureStandardDailySlots(
@@ -53,7 +66,9 @@ export async function ensureStandardDailySlots(
 
   if (qErr) throw qErr;
   const have = new Set(
-    (existingRows ?? []).map((r: { starts_at: string }) => r.starts_at)
+    (existingRows ?? []).map((r: { starts_at: string }) =>
+      slotTimeKey(r.starts_at)
+    )
   );
 
   for (let d = 0; d < horizon; d++) {
@@ -67,9 +82,18 @@ export async function ensureStandardDailySlots(
         AUTO_SLOT_DURATION_MIN
       );
       if (starts_at < now) continue;
-      if (have.has(starts_at)) continue;
-      const row = await insertSlot(supabase, { starts_at, ends_at });
-      have.add(row.starts_at);
+      const key = slotTimeKey(starts_at);
+      if (have.has(key)) continue;
+      try {
+        const row = await insertSlot(supabase, { starts_at, ends_at });
+        have.add(slotTimeKey(row.starts_at));
+      } catch (e) {
+        if (isUniqueViolation(e)) {
+          have.add(key);
+          continue;
+        }
+        throw e;
+      }
     }
   }
 }

@@ -28,7 +28,8 @@ function normalizeHHMM(v: unknown, fallback: string): string {
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
-const schema = z.object({
+const schema = z
+  .object({
   BOT_TOKEN: z.string().min(1),
   BOT_USERNAME: z.string().min(1),
   ADMIN_TELEGRAM_ID: z
@@ -39,6 +40,25 @@ const schema = z.object({
       (n) => Number.isInteger(n) && n > 0,
       "ADMIN_TELEGRAM_ID должен быть целым числом > 0"
     ),
+  /** Второй администратор (опционально). Те же права, что у первого. */
+  ADMIN_TELEGRAM_ID_2: z.preprocess(
+    (v) =>
+      v === undefined || v === null || String(v).trim() === ""
+        ? undefined
+        : String(v).trim(),
+    z
+      .union([
+        z.undefined(),
+        z
+          .string()
+          .transform((s) => Number(s))
+          .refine(
+            (n) => Number.isInteger(n) && n > 0,
+            "ADMIN_TELEGRAM_ID_2: целое число > 0 или оставьте пустым"
+          ),
+      ])
+      .optional()
+  ),
 
   PUBLIC_BASE_URL: z.preprocess(
     (v) => normalizePublicBaseUrl(v),
@@ -80,9 +100,28 @@ const schema = z.object({
 
   /** Сколько календарных дней вперёд создавать слоты в БД (включая сегодня). Совпадает с выбором дат в боте (7 дней). */
   AUTO_SLOTS_HORIZON_DAYS: z.coerce.number().int().positive().max(90).default(7),
-});
+})
+  .superRefine((data, ctx) => {
+    if (
+      data.ADMIN_TELEGRAM_ID_2 !== undefined &&
+      data.ADMIN_TELEGRAM_ID_2 === data.ADMIN_TELEGRAM_ID
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ADMIN_TELEGRAM_ID_2 не должен совпадать с ADMIN_TELEGRAM_ID",
+        path: ["ADMIN_TELEGRAM_ID_2"],
+      });
+    }
+  });
 
 export type Env = z.infer<typeof schema>;
+
+/** Все Telegram user id с правами администратора (1 или 2 человека). */
+export function adminTelegramIds(env: Env): number[] {
+  const ids: number[] = [env.ADMIN_TELEGRAM_ID];
+  if (env.ADMIN_TELEGRAM_ID_2 !== undefined) ids.push(env.ADMIN_TELEGRAM_ID_2);
+  return ids;
+}
 
 export function loadEnv(): Env {
   const parsed = schema.safeParse(process.env);

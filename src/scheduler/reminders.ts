@@ -1,6 +1,6 @@
 import { Markup } from "telegraf";
 import type { Telegraf } from "telegraf";
-import type { Env } from "../config/env.js";
+import { adminTelegramIds, type Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   expireStalePendingAppointments,
@@ -102,31 +102,32 @@ export function startSchedulers(
             console.error(`reminder ${kind} to client`, e);
           }
 
-          try {
-            const name = apt.clients.full_name?.trim() || "Клиент";
-            const phone = apt.clients.phone?.trim() || "—";
-            await bot.telegram.sendMessage(
-              env.ADMIN_TELEGRAM_ID,
-              kind === "2h"
-                ? [
-                    "⏰ Через 2 часа сеанс.",
-                    "",
-                    `📅 ${when}`,
-                    "",
-                    `👤 ${name}`,
-                    `📞 ${phone}`,
-                  ].join("\n")
-                : [
-                    "🔔 Через 1 час сеанс.",
-                    "",
-                    `📅 ${when}`,
-                    "",
-                    `👤 ${name}`,
-                    `📞 ${phone}`,
-                  ].join("\n")
-            );
-          } catch (e) {
-            console.error(`reminder ${kind} to admin`, e);
+          const name = apt.clients.full_name?.trim() || "Клиент";
+          const phone = apt.clients.phone?.trim() || "—";
+          const adminMsg =
+            kind === "2h"
+              ? [
+                  "⏰ Через 2 часа сеанс.",
+                  "",
+                  `📅 ${when}`,
+                  "",
+                  `👤 ${name}`,
+                  `📞 ${phone}`,
+                ].join("\n")
+              : [
+                  "🔔 Через 1 час сеанс.",
+                  "",
+                  `📅 ${when}`,
+                  "",
+                  `👤 ${name}`,
+                  `📞 ${phone}`,
+                ].join("\n");
+          for (const adminId of adminTelegramIds(env)) {
+            try {
+              await bot.telegram.sendMessage(adminId, adminMsg);
+            } catch (e) {
+              console.error(`reminder ${kind} to admin`, e);
+            }
           }
         }
       } catch (e) {

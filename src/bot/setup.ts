@@ -1,7 +1,7 @@
 import { Telegraf, session, Markup } from "telegraf";
 import type { Context } from "telegraf";
 import { randomUUID } from "node:crypto";
-import type { Env } from "../config/env.js";
+import { adminTelegramIds, type Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AppointmentStatus,
@@ -34,6 +34,7 @@ import {
 } from "../services/settingsRepo.js";
 import { createYookassaPayment } from "../services/yookassaClient.js";
 import { syncPendingPaymentFromYookassaApi } from "../services/paymentConfirmation.js";
+import { ensureStandardDailySlots } from "../services/autoSlots.js";
 import { formatSelectedProcedureLine } from "../services/procedureLine.js";
 import {
   formatShortRu,
@@ -83,7 +84,9 @@ type InlineMessageExtra = NonNullable<
 >;
 
 function isAdmin(ctx: BotContext, env: Env): boolean {
-  return ctx.from?.id === env.ADMIN_TELEGRAM_ID;
+  const id = ctx.from?.id;
+  if (id === undefined) return false;
+  return adminTelegramIds(env).includes(id);
 }
 
 /** Закреплённая reply-клавиатура админа (Telegram «закрепить» внизу чата). */
@@ -438,6 +441,11 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
 
   bot.action("book", async (ctx) => {
     if (!ctx.from) return;
+    try {
+      await ensureStandardDailySlots(supabase, env);
+    } catch (e) {
+      console.error("ensureStandardDailySlots before book", e);
+    }
     const slots = await listAvailableSlots(supabase, 50, {
       start: env.WORKING_HOURS_START,
       end: env.WORKING_HOURS_END,
@@ -482,6 +490,11 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   bot.action(/^bookday:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
     if (!ctx.from) return;
     const ymd = ctx.match[1];
+    try {
+      await ensureStandardDailySlots(supabase, env);
+    } catch (e) {
+      console.error("ensureStandardDailySlots before bookday", e);
+    }
     const slots = await listAvailableSlots(supabase, 50, {
       start: env.WORKING_HOURS_START,
       end: env.WORKING_HOURS_END,
