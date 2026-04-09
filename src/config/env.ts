@@ -32,6 +32,17 @@ const schema = z
   .object({
   BOT_TOKEN: z.string().min(1),
   BOT_USERNAME: z.string().min(1),
+  /**
+   * ID канала для поста «призыв к записи» из админки (например -1001234567890).
+   * Бот должен быть администратором канала с правом публиковать сообщения.
+   */
+  TELEGRAM_CHANNEL_ID: z
+    .string()
+    .optional()
+    .transform((s) => {
+      if (s === undefined || s.trim() === "") return undefined;
+      return s.trim();
+    }),
   ADMIN_TELEGRAM_ID: z
     .string()
     .min(1, "Укажите ADMIN_TELEGRAM_ID (числовой id в Telegram)")

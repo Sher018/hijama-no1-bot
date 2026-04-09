@@ -55,7 +55,7 @@ import {
   listClosureDays,
   removeClosureDay,
 } from "../services/closureDaysRepo.js";
-import { sendMainWelcome } from "./welcome.js";
+import { channelCallToBookHtml, sendMainWelcome } from "./welcome.js";
 import {
   SERVICES,
   assetPath,
@@ -602,6 +602,12 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         Markup.button.callback("Слоты и записи", "admin:slots_menu"),
         Markup.button.callback("Справка (текст)", "admin:cmd:help"),
       ],
+      [
+        Markup.button.callback(
+          "Пост в канал (запись)",
+          "admin:channel_post"
+        ),
+      ],
     ]);
 
   async function showAdminClosurePanel(ctx: BotContext) {
@@ -1118,6 +1124,36 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     }
     await ctx.answerCbQuery();
     await showAdminHelpText(ctx);
+  });
+
+  bot.action("admin:channel_post", async (ctx) => {
+    if (!isAdmin(ctx, env)) {
+      await ctx.answerCbQuery("Нет доступа");
+      return;
+    }
+    const cid = env.TELEGRAM_CHANNEL_ID;
+    if (!cid) {
+      await ctx.answerCbQuery(
+        "Задайте TELEGRAM_CHANNEL_ID в переменных окружения и сделайте бота админом канала.",
+        { show_alert: true }
+      );
+      return;
+    }
+    await ctx.answerCbQuery();
+    const text = channelCallToBookHtml(env.BOT_USERNAME);
+    try {
+      await bot.telegram.sendMessage(cid, text, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+    } catch (e) {
+      console.error("admin channel post", e);
+      await ctx.reply(
+        "Не удалось отправить в канал. Проверьте TELEGRAM_CHANNEL_ID и права бота (публикация сообщений)."
+      );
+      return;
+    }
+    await ctx.reply("Готово: пост отправлен в канал.");
   });
 
   bot.action("admin:addslot", async (ctx) => {
