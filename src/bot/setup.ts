@@ -1,7 +1,6 @@
 import { Telegraf, session, Markup } from "telegraf";
-import type { Context } from "telegraf";
 import { randomUUID } from "node:crypto";
-import { adminTelegramIds, type Env } from "../config/env.js";
+import { adminTelegramIds, masterTelegramId, type Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AppointmentStatus,
@@ -64,19 +63,11 @@ import {
   publicAssetUrl,
   telegramInlineButtonText,
 } from "./content/servicesCatalog.js";
-
-interface SessionData {
-  step?: "name" | "phone" | "admin_closure" | "admin_price" | "admin_addslot";
-  slotId?: string;
-  tempName?: string;
-  adminPriceServiceId?: string;
-  /** услуга из раздела «Услуги» (для цены в сообщении об оплате) */
-  selectedServiceId?: string;
-  /** message_id приветствия — не удалять при навигации по кнопкам */
-  welcomeMessageId?: number;
-}
-
-type BotContext = Context & { session?: SessionData };
+import type { BotContext, SessionData } from "./context.js";
+import {
+  registerMasterSchedule,
+  masterMainMenuKeyboard,
+} from "../admin/scheduleHandler.js";
 
 /** Только inline-клавиатура, как у editMessageText (без deep-import из telegraf/typings). */
 type InlineMessageExtra = NonNullable<
@@ -87,6 +78,10 @@ function isAdmin(ctx: BotContext, env: Env): boolean {
   const id = ctx.from?.id;
   if (id === undefined) return false;
   return adminTelegramIds(env).includes(id);
+}
+
+function isMaster(ctx: BotContext, env: Env): boolean {
+  return ctx.from?.id === masterTelegramId(env);
 }
 
 /** Закреплённая reply-клавиатура админа (Telegram «закрепить» внизу чата). */
@@ -165,6 +160,28 @@ async function deleteMessageIfNotWelcome(
   }
 }
 
+/** Подсказка под ссылкой на оплату: кнопка «✅ Оплатил» */
+const PAYMENT_HINT_IF_NO_CONFIRM =
+  "Если оплата прошла, а подтверждение не пришло — нажмите «✅ Оплатил» ниже.";
+
+function pendingPaymentInlineKeyboard(
+  prepaymentRub: number,
+  appointmentId: string,
+  paymentUrl?: string | null
+) {
+  const paid = Markup.button.callback(
+    "✅ Оплатил",
+    `pay:done:${appointmentId}`
+  );
+  if (paymentUrl) {
+    return Markup.inlineKeyboard([
+      [Markup.button.url(`Оплатить ${prepaymentRub} ₽`, paymentUrl)],
+      [paid],
+    ]);
+  }
+  return Markup.inlineKeyboard([[paid]]);
+}
+
 async function answerAndEditOrReplyText(
   ctx: BotContext,
   text: string,
@@ -212,15 +229,13 @@ async function replyPendingPayment(
     "",
     "После оплаты вы вернётесь в бот — придёт подтверждение.",
     "",
-    "Если оплата прошла, а подтверждение не пришло — нажмите /start или отправьте любое сообщение боту.",
+    PAYMENT_HINT_IF_NO_CONFIRM,
   ];
   const url = cur.yookassa_confirmation_url;
   if (url) {
     await ctx.reply(
       lines.join("\n"),
-      Markup.inlineKeyboard([
-        [Markup.button.url(`Оплатить ${cur.prepayment_rub} ₽`, url)],
-      ])
+      pendingPaymentInlineKeyboard(cur.prepayment_rub, cur.id, url)
     );
     return;
   }
@@ -229,7 +244,8 @@ async function replyPendingPayment(
       ...lines,
       "",
       "Ссылка на оплату недоступна (обновите проект и миграции БД или начните запись снова после истечения резерва ~30 мин).",
-    ].join("\n")
+    ].join("\n"),
+    pendingPaymentInlineKeyboard(cur.prepayment_rub, cur.id, null)
   );
 }
 
@@ -243,6 +259,8 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       defaultSession: (): SessionData => ({}),
     })
   );
+
+  registerMasterSchedule(bot, env, supabase);
 
   bot.use(async (ctx, next) => {
     if (!ctx.from || ctx.chat?.type !== "private") return next();
@@ -322,6 +340,46 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
         "По вопросам записи можно написать прямо здесь — мастер ответит, когда будет на связи.",
       ].join("\n")
     );
+  });
+
+  /** Повторная проверка оплаты в ЮKassa (если вебхук не успел). */
+  bot.action(/^pay:done:([a-f0-9-]+)$/i, async (ctx) => {
+    if (!ctx.from) return;
+    const appointmentId = ctx.match[1];
+    const client = await getClientByTelegramId(supabase, ctx.from.id);
+    if (!client) {
+      await ctx.answerCbQuery("Откройте чат с ботом и нажмите /start.");
+      return;
+    }
+    const apt = await getAppointmentById(supabase, appointmentId);
+    if (!apt || apt.client_id !== client.id) {
+      await ctx.answerCbQuery("Запись не найдена или не ваша.");
+      return;
+    }
+    if (apt.status === "confirmed") {
+      await ctx.answerCbQuery("Запись уже подтверждена ✅");
+      return;
+    }
+    if (apt.status !== "pending_payment") {
+      await ctx.answerCbQuery("Статус записи изменился. Нажмите /start.");
+      return;
+    }
+    const ok = await syncPendingPaymentFromYookassaApi(
+      env,
+      supabase,
+      bot,
+      appointmentId
+    );
+    if (ok) {
+      await ctx.answerCbQuery(
+        "Оплата подтверждена — смотрите новое сообщение в чате."
+      );
+    } else {
+      await ctx.answerCbQuery(
+        "Платёж ещё не виден. Подождите минуту и нажмите снова или напишите в чат.",
+        { show_alert: true }
+      );
+    }
   });
 
   bot.action("menu:main", async (ctx) => {
@@ -958,16 +1016,13 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
           "",
           "После оплаты вы вернётесь в этот чат — придёт сообщение с подтверждением записи.",
           "",
-          "Если оплата прошла, а сообщение не пришло — нажмите /start или отправьте любое сообщение боту.",
+          PAYMENT_HINT_IF_NO_CONFIRM,
         ].join("\n"),
-        Markup.inlineKeyboard([
-          [
-            Markup.button.url(
-              `Оплатить ${appointment.prepayment_rub} ₽`,
-              payment.confirmationUrl
-            ),
-          ],
-        ])
+        pendingPaymentInlineKeyboard(
+          appointment.prepayment_rub,
+          appointment.id,
+          payment.confirmationUrl
+        )
       );
       return;
     }
@@ -976,6 +1031,29 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   });
 
   bot.command("admin", async (ctx) => {
+    if (isMaster(ctx, env)) {
+      if (ctx.session) {
+        if (ctx.session.step === "admin_price") {
+          delete ctx.session.adminPriceServiceId;
+        }
+        if (
+          ctx.session.step === "admin_addslot" ||
+          ctx.session.step === "admin_closure" ||
+          ctx.session.step === "admin_price"
+        ) {
+          delete ctx.session.step;
+        }
+        delete ctx.session.masterSch;
+      }
+      await ctx.reply(
+        "🤲 <b>Меню мастера «Хиджама №1»</b>\n\nВыберите действие:",
+        {
+          parse_mode: "HTML",
+          ...masterMainMenuKeyboard(),
+        }
+      );
+      return;
+    }
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;

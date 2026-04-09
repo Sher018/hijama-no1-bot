@@ -51,6 +51,28 @@ const schema = z
       (n) => Number.isInteger(n) && n > 0,
       "ADMIN_TELEGRAM_ID должен быть целым числом > 0"
     ),
+  /**
+   * Telegram user id мастера (график /schedule, меню мастера в /admin).
+   * Если не задан — считается равным ADMIN_TELEGRAM_ID.
+   */
+  OWNER_TELEGRAM_ID: z.preprocess(
+    (v) =>
+      v === undefined || v === null || String(v).trim() === ""
+        ? undefined
+        : String(v).trim(),
+    z
+      .union([
+        z.undefined(),
+        z
+          .string()
+          .transform((s) => Number(s))
+          .refine(
+            (n) => Number.isInteger(n) && n > 0,
+            "OWNER_TELEGRAM_ID: целое число > 0 или оставьте пустым"
+          ),
+      ])
+      .optional()
+  ),
   /** Второй администратор (опционально). Те же права, что у первого. */
   ADMIN_TELEGRAM_ID_2: z.preprocess(
     (v) =>
@@ -100,8 +122,8 @@ const schema = z
     z.string()
   ),
 
-  /** Максимум слотов на один календарный день (Иркутск), в пределах графика WORKING_HOURS_* */
-  MAX_SLOTS_PER_DAY: z.coerce.number().int().positive().default(5),
+  /** Максимум слотов на календарный день (ручной /addslot и лимит по дню); график 10–21 / 60 мин ≈ 11 окон */
+  MAX_SLOTS_PER_DAY: z.coerce.number().int().positive().default(24),
 
   /** Автослоты: 5 окон в день (10,13,15,17,19 Иркутск). false — только ручное /addslot */
   AUTO_SLOTS_ENABLED: z
@@ -132,6 +154,11 @@ export function adminTelegramIds(env: Env): number[] {
   const ids: number[] = [env.ADMIN_TELEGRAM_ID];
   if (env.ADMIN_TELEGRAM_ID_2 !== undefined) ids.push(env.ADMIN_TELEGRAM_ID_2);
   return ids;
+}
+
+/** Мастер (владелец графика): OWNER_TELEGRAM_ID или, если не задан, первый админ. */
+export function masterTelegramId(env: Env): number {
+  return env.OWNER_TELEGRAM_ID ?? env.ADMIN_TELEGRAM_ID;
 }
 
 export function loadEnv(): Env {
