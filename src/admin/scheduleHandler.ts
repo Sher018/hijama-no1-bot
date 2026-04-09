@@ -2,7 +2,7 @@ import { Markup } from "telegraf";
 import type { Telegraf } from "telegraf";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env } from "../config/env.js";
-import { masterTelegramId } from "../config/env.js";
+import { isScheduleAdmin } from "../config/env.js";
 import type { BotContext } from "../bot/context.js";
 import { listClosureDays, addClosureDay, removeClosureDay } from "../services/closureDaysRepo.js";
 import {
@@ -28,11 +28,7 @@ import {
 } from "../util/time.js";
 import { formatSelectedProcedureLine } from "../services/procedureLine.js";
 
-const DENY_MASTER = "❌ Эта команда доступна только мастеру";
-
-function isMaster(ctx: BotContext, env: Env): boolean {
-  return ctx.from?.id === masterTelegramId(env);
-}
+const DENY_SCHEDULE = "❌ Раздел доступен только администраторам";
 
 /** YYYY-MM-DD → YYYYMMDD для callback_data */
 function packYmd(ymd: string): string {
@@ -141,11 +137,15 @@ export function registerMasterSchedule(
 ): void {
   /** Текстовый ввод часов / блока (мастер) */
   bot.use(async (ctx, next) => {
-    if (ctx.chat?.type !== "private" || !ctx.message?.text) return next();
-    if (!isMaster(ctx, env)) return next();
+    if (ctx.chat?.type !== "private") return next();
+    const msg = ctx.message;
+    if (!msg || !("text" in msg) || typeof msg.text !== "string") {
+      return next();
+    }
+    if (!isScheduleAdmin(ctx, env)) return next();
     const st = ctx.session?.masterSch;
     if (!st?.step || !st.ymd) return next();
-    const text = ctx.message.text.trim();
+    const text = msg.text.trim();
     if (text.startsWith("/")) {
       ctx.session ??= {};
       delete ctx.session.masterSch;
@@ -258,8 +258,8 @@ export function registerMasterSchedule(
   });
 
   bot.command("schedule", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.reply(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.reply(DENY_SCHEDULE);
       return;
     }
     await ctx.reply(await formatWeekTable(supabase, env), {
@@ -269,8 +269,8 @@ export function registerMasterSchedule(
   });
 
   bot.action("sch:menu", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     await ctx.answerCbQuery();
@@ -281,8 +281,8 @@ export function registerMasterSchedule(
   });
 
   bot.action("sch:week", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     await ctx.answerCbQuery();
@@ -293,8 +293,8 @@ export function registerMasterSchedule(
   });
 
   bot.action("sch:legacy", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     await ctx.answerCbQuery();
@@ -307,8 +307,8 @@ export function registerMasterSchedule(
   });
 
   bot.action("sch:blockmenu", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     await ctx.answerCbQuery();
@@ -319,8 +319,8 @@ export function registerMasterSchedule(
   });
 
   bot.action("sch:bookings", async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     await ctx.answerCbQuery();
@@ -349,8 +349,8 @@ export function registerMasterSchedule(
   });
 
   bot.action(/^sch:d:(\d{8})$/, async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     const ymd = unpackYmd(ctx.match[1]);
@@ -415,8 +415,8 @@ export function registerMasterSchedule(
   });
 
   bot.action(/^sch:hours:(\d{8})$/, async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     const ymd = unpackYmd(ctx.match[1]);
@@ -438,8 +438,8 @@ export function registerMasterSchedule(
   });
 
   bot.action(/^sch:blk:(\d{8})$/, async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     const ymd = unpackYmd(ctx.match[1]);
@@ -457,8 +457,8 @@ export function registerMasterSchedule(
   });
 
   bot.action(/^sch:off:(\d{8})$/, async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     const ymd = unpackYmd(ctx.match[1]);
@@ -487,8 +487,8 @@ export function registerMasterSchedule(
   });
 
   bot.action(/^sch:open:(\d{8})$/, async (ctx) => {
-    if (!isMaster(ctx, env)) {
-      await ctx.answerCbQuery(DENY_MASTER);
+    if (!isScheduleAdmin(ctx, env)) {
+      await ctx.answerCbQuery(DENY_SCHEDULE);
       return;
     }
     const ymd = unpackYmd(ctx.match[1]);

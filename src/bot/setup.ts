@@ -1,6 +1,6 @@
 import { Telegraf, session, Markup } from "telegraf";
 import { randomUUID } from "node:crypto";
-import { adminTelegramIds, masterTelegramId, type Env } from "../config/env.js";
+import { adminTelegramIds, type Env } from "../config/env.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AppointmentStatus,
@@ -78,10 +78,6 @@ function isAdmin(ctx: BotContext, env: Env): boolean {
   const id = ctx.from?.id;
   if (id === undefined) return false;
   return adminTelegramIds(env).includes(id);
-}
-
-function isMaster(ctx: BotContext, env: Env): boolean {
-  return ctx.from?.id === masterTelegramId(env);
 }
 
 /** Закреплённая reply-клавиатура админа (Telegram «закрепить» внизу чата). */
@@ -1031,29 +1027,6 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   });
 
   bot.command("admin", async (ctx) => {
-    if (isMaster(ctx, env)) {
-      if (ctx.session) {
-        if (ctx.session.step === "admin_price") {
-          delete ctx.session.adminPriceServiceId;
-        }
-        if (
-          ctx.session.step === "admin_addslot" ||
-          ctx.session.step === "admin_closure" ||
-          ctx.session.step === "admin_price"
-        ) {
-          delete ctx.session.step;
-        }
-        delete ctx.session.masterSch;
-      }
-      await ctx.reply(
-        "🤲 <b>Меню мастера «Хиджама №1»</b>\n\nВыберите действие:",
-        {
-          parse_mode: "HTML",
-          ...masterMainMenuKeyboard(),
-        }
-      );
-      return;
-    }
     if (!isAdmin(ctx, env)) {
       await ctx.reply("Команда доступна только администратору.");
       return;
@@ -1069,7 +1042,15 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       ) {
         delete ctx.session.step;
       }
+      delete ctx.session.masterSch;
     }
+    await ctx.reply(
+      "🤲 <b>Меню мастера «Хиджама №1»</b>\n\nВыберите действие:",
+      {
+        parse_mode: "HTML",
+        ...masterMainMenuKeyboard(),
+      }
+    );
     await ctx.reply(
       "Панель администратора. Кнопки внизу закреплены — быстрый доступ к разделам.",
       adminPinnedReplyKb()

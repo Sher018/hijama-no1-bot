@@ -51,28 +51,6 @@ const schema = z
       (n) => Number.isInteger(n) && n > 0,
       "ADMIN_TELEGRAM_ID должен быть целым числом > 0"
     ),
-  /**
-   * Telegram user id мастера (график /schedule, меню мастера в /admin).
-   * Если не задан — считается равным ADMIN_TELEGRAM_ID.
-   */
-  OWNER_TELEGRAM_ID: z.preprocess(
-    (v) =>
-      v === undefined || v === null || String(v).trim() === ""
-        ? undefined
-        : String(v).trim(),
-    z
-      .union([
-        z.undefined(),
-        z
-          .string()
-          .transform((s) => Number(s))
-          .refine(
-            (n) => Number.isInteger(n) && n > 0,
-            "OWNER_TELEGRAM_ID: целое число > 0 или оставьте пустым"
-          ),
-      ])
-      .optional()
-  ),
   /** Второй администратор (опционально). Те же права, что у первого. */
   ADMIN_TELEGRAM_ID_2: z.preprocess(
     (v) =>
@@ -156,9 +134,14 @@ export function adminTelegramIds(env: Env): number[] {
   return ids;
 }
 
-/** Мастер (владелец графика): OWNER_TELEGRAM_ID или, если не задан, первый админ. */
-export function masterTelegramId(env: Env): number {
-  return env.OWNER_TELEGRAM_ID ?? env.ADMIN_TELEGRAM_ID;
+/** График /schedule и меню мастера в /admin — для ADMIN_TELEGRAM_ID и ADMIN_TELEGRAM_ID_2. */
+export function isScheduleAdmin(
+  ctx: { from?: { id: number } },
+  env: Env
+): boolean {
+  const id = ctx.from?.id;
+  if (id === undefined) return false;
+  return adminTelegramIds(env).includes(id);
 }
 
 export function loadEnv(): Env {
