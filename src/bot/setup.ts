@@ -474,10 +474,9 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
   });
 
   bot.action(/^bookunavail:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
-    await ctx.answerCbQuery({
-      text: "На эту дату нет свободных окон. Выберите другой день.",
-      show_alert: false,
-    });
+    await ctx.answerCbQuery(
+      "На эту дату нет свободных окон. Выберите другой день."
+    );
   });
 
   bot.action(/^bookday:(\d{4}-\d{2}-\d{2})$/, async (ctx) => {
