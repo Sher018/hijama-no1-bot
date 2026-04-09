@@ -67,6 +67,11 @@ import type { BotContext, SessionData } from "./context.js";
 import {
   registerMasterSchedule,
   masterMainMenuKeyboard,
+  PINNED_MASTER_LABELS,
+  replyPinnedWeekSchedule,
+  replyPinnedLegacyHint,
+  replyPinnedBlockMenu,
+  replyPinnedBookings,
 } from "../admin/scheduleHandler.js";
 
 /** Только inline-клавиатура, как у editMessageText (без deep-import из telegraf/typings). */
@@ -80,11 +85,13 @@ function isAdmin(ctx: BotContext, env: Env): boolean {
   return adminTelegramIds(env).includes(id);
 }
 
-/** Закреплённая reply-клавиатура админа (Telegram «закрепить» внизу чата). */
+/** Закреплённая reply-клавиатура админа — те же пункты, что в меню мастера, плюс «Цены услуг». */
 function adminPinnedReplyKb() {
+  const L = PINNED_MASTER_LABELS;
   return Markup.keyboard([
-    ["Выходные дни", "Цены услуг"],
-    ["Слоты и записи", "Справка"],
+    [L.week, L.addSlots],
+    [L.block, L.bookings],
+    [L.settings, "Цены услуг"],
   ])
     .resize()
     .persistent();
@@ -301,7 +308,7 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     if (welcomeId) ctx.session.welcomeMessageId = welcomeId;
     if (isAdmin(ctx as BotContext, env)) {
       await ctx.reply(
-        "Разделы администратора — кнопки внизу закреплены.",
+        "Меню мастера — кнопки внизу закреплены (и «Цены услуг»).",
         adminPinnedReplyKb()
       );
     }
@@ -828,11 +835,14 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
     const trimmed = ctx.message.text.trim();
     const step = ctx.session?.step;
     if (isAdmin(ctx as BotContext, env)) {
+      const L = PINNED_MASTER_LABELS;
       const adminPinned: Record<string, () => Promise<void>> = {
-        "Выходные дни": () => showAdminClosurePanel(ctx),
+        [L.week]: () => replyPinnedWeekSchedule(ctx, supabase, env),
+        [L.addSlots]: () => replyPinnedLegacyHint(ctx),
+        [L.block]: () => replyPinnedBlockMenu(ctx),
+        [L.bookings]: () => replyPinnedBookings(ctx, supabase),
+        [L.settings]: () => replyPinnedLegacyHint(ctx),
         "Цены услуг": () => showAdminPricesPanel(ctx),
-        "Слоты и записи": () => showAdminSlotsMenu(ctx),
-        Справка: () => showAdminHelpText(ctx),
       };
       const run = adminPinned[trimmed];
       if (run) {

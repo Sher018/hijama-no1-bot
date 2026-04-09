@@ -130,6 +130,70 @@ function weekDayButtons() {
   return Markup.inlineKeyboard(rows);
 }
 
+/** Подписи закреплённых reply-кнопок — те же, что в inline-меню мастера. */
+export const PINNED_MASTER_LABELS = {
+  week: "📅 Мой график на неделю",
+  addSlots: "➕ Добавить/изменить слоты",
+  block: "🔒 Заблокировать время",
+  bookings: "📋 Все текущие записи",
+  settings: "⚙️ Настройки бота",
+} as const;
+
+export async function replyPinnedWeekSchedule(
+  ctx: BotContext,
+  supabase: SupabaseClient,
+  env: Env
+): Promise<void> {
+  await ctx.reply(await formatWeekTable(supabase, env), {
+    parse_mode: "HTML",
+    ...weekDayButtons(),
+  });
+}
+
+export async function replyPinnedLegacyHint(ctx: BotContext): Promise<void> {
+  await ctx.reply(
+    [
+      "Классическая панель: выходные, цены, ручной слот, списки.",
+      "Используйте закреплённые кнопки внизу или команду /admin после переключения.",
+    ].join("\n")
+  );
+}
+
+export async function replyPinnedBlockMenu(ctx: BotContext): Promise<void> {
+  await ctx.reply(
+    "🔒 Выберите день — затем можно будет ввести интервал блокировки (например 12:00–14:00).",
+    weekDayButtons()
+  );
+}
+
+export async function replyPinnedBookings(
+  ctx: BotContext,
+  supabase: SupabaseClient
+): Promise<void> {
+  const from = new Date().toISOString();
+  const to = new Date(Date.now() + 14 * 86400_000).toISOString();
+  const list = await listAppointmentsInSlotRange(supabase, from, to);
+  if (list.length === 0) {
+    await ctx.reply("На ближайшие 14 дней записей нет.");
+    return;
+  }
+  const chunks: string[] = [];
+  for (const a of list) {
+    const proc = await formatSelectedProcedureLine(supabase, a.notes);
+    chunks.push(
+      [
+        `📌 ${formatSlotRu(a.slots.starts_at)}`,
+        `${a.clients.full_name ?? "Клиент"} · ${a.clients.phone ?? "—"}`,
+        proc ? proc : "",
+        `статус: ${a.status}`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  }
+  await ctx.reply(chunks.join("\n\n"));
+}
+
 export function registerMasterSchedule(
   bot: Telegraf<BotContext>,
   env: Env,
@@ -286,10 +350,7 @@ export function registerMasterSchedule(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.reply(await formatWeekTable(supabase, env), {
-      parse_mode: "HTML",
-      ...weekDayButtons(),
-    });
+    await replyPinnedWeekSchedule(ctx, supabase, env);
   });
 
   bot.action("sch:legacy", async (ctx) => {
@@ -298,12 +359,7 @@ export function registerMasterSchedule(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.reply(
-      [
-        "Классическая панель: выходные, цены, ручной слот, списки.",
-        "Используйте закреплённые кнопки внизу или команду /admin после переключения.",
-      ].join("\n")
-    );
+    await replyPinnedLegacyHint(ctx);
   });
 
   bot.action("sch:blockmenu", async (ctx) => {
@@ -312,10 +368,7 @@ export function registerMasterSchedule(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.reply(
-      "🔒 Выберите день — затем можно будет ввести интервал блокировки (например 12:00–14:00).",
-      weekDayButtons()
-    );
+    await replyPinnedBlockMenu(ctx);
   });
 
   bot.action("sch:bookings", async (ctx) => {
@@ -324,28 +377,7 @@ export function registerMasterSchedule(
       return;
     }
     await ctx.answerCbQuery();
-    const from = new Date().toISOString();
-    const to = new Date(Date.now() + 14 * 86400_000).toISOString();
-    const list = await listAppointmentsInSlotRange(supabase, from, to);
-    if (list.length === 0) {
-      await ctx.reply("На ближайшие 14 дней записей нет.");
-      return;
-    }
-    const chunks: string[] = [];
-    for (const a of list) {
-      const proc = await formatSelectedProcedureLine(supabase, a.notes);
-      chunks.push(
-        [
-          `📌 ${formatSlotRu(a.slots.starts_at)}`,
-          `${a.clients.full_name ?? "Клиент"} · ${a.clients.phone ?? "—"}`,
-          proc ? proc : "",
-          `статус: ${a.status}`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-    }
-    await ctx.reply(chunks.join("\n\n"));
+    await replyPinnedBookings(ctx, supabase);
   });
 
   bot.action(/^sch:d:(\d{8})$/, async (ctx) => {
