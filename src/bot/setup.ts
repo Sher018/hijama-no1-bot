@@ -65,6 +65,10 @@ import {
 } from "./content/servicesCatalog.js";
 import type { BotContext, SessionData } from "./context.js";
 import {
+  CLIENT_PHONE_FORMAT_HINT,
+  normalizeClientPhoneRu,
+} from "../util/clientPhone.js";
+import {
   registerMasterSchedule,
   masterMainMenuKeyboard,
   PINNED_MASTER_LABELS,
@@ -934,13 +938,20 @@ export function buildBot(env: Env, supabase: SupabaseClient): Telegraf<BotContex
       ctx.session.tempName = text;
       ctx.session.step = "phone";
       await ctx.reply(
-        "Укажите телефон для связи (в любом удобном формате одним сообщением)."
+        [
+          "Укажите телефон для связи одним сообщением.",
+          "Формат: 8-912-345-67-89 или 89123456789 / +79123456789.",
+        ].join("\n")
       );
       return;
     }
 
     if (ctx.session.step === "phone") {
-      const phone = text;
+      const phone = normalizeClientPhoneRu(text);
+      if (!phone) {
+        await ctx.reply(CLIENT_PHONE_FORMAT_HINT, { parse_mode: "HTML" });
+        return;
+      }
       const slotId = ctx.session.slotId;
       const name = ctx.session.tempName;
       if (!slotId || !name) {
